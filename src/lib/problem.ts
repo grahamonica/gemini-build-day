@@ -13,6 +13,7 @@ export interface ProblemInit {
     sourceImage?: string;
     croppedImage?: string;
     bbox?: BoundingBox | null;
+    page?: number;
 }
 
 export class Problem {
@@ -23,8 +24,9 @@ export class Problem {
     sourceImage?: string;
     croppedImage?: string;
     bbox?: BoundingBox | null;
+    page?: number;
 
-    constructor({ id, title, text, latex, sourceImage, croppedImage, bbox }: ProblemInit) {
+    constructor({ id, title, text, latex, sourceImage, croppedImage, bbox, page }: ProblemInit) {
         this.id = id;
         this.title = title;
         this.text = text;
@@ -32,5 +34,6 @@ export class Problem {
         this.sourceImage = sourceImage;
         this.croppedImage = croppedImage;
         this.bbox = bbox ?? null;
+        this.page = page;
     }
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState, useEffect, useCallback } from "react";
+import React, { useRef, useState, useEffect, useCallback, useMemo } from "react";
 import { Eraser, Link2, Loader2, Pencil, Send, Trash2, UploadCloud } from "lucide-react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
@@ -30,6 +30,14 @@ export function Whiteboard() {
     const [problems, setProblems] = useState<Problem[]>([]);
     const [activeProblemId, setActiveProblemId] = useState<string | null>(null);
     const lastPoint = useRef<Point | null>(null);
+
+    const selectedProblem = useMemo(
+        () =>
+            (activeProblemId && problems.find((problem) => problem.id === activeProblemId)) ||
+            problems[0] ||
+            null,
+        [activeProblemId, problems]
+    );
 
     useEffect(() => {
         if (problems.length && !activeProblemId) {
@@ -273,56 +281,62 @@ export function Whiteboard() {
         return pages;
     }, []);
 
-    const requestProblemsFromGemini = useCallback(async (imageDataUrl: string, labelPrefix: string) => {
-        const response = await fetch("/api/parse-problems", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ image: imageDataUrl }),
-        });
+    const requestProblemsFromGemini = useCallback(
+        async (images: string[], labelPrefix: string) => {
+            const response = await fetch("/api/parse-problems", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ images }),
+            });
 
-        if (!response.ok) {
-            throw new Error("Failed to parse problems");
-        }
-
-        const data = await response.json();
-        const parsedProblems = Array.isArray(data.problems) ? data.problems : [];
-
-        const hydrated: Problem[] = [];
-
-        for (let i = 0; i < parsedProblems.length; i++) {
-            const raw = parsedProblems[i] || {};
-            const bbox = raw.bbox as BoundingBox | undefined;
-            let croppedImage: string | undefined;
-
-            if (bbox) {
-                const safeBox: BoundingBox = {
-                    x: Math.max(0, Math.min(1, bbox.x ?? 0)),
-                    y: Math.max(0, Math.min(1, bbox.y ?? 0)),
-                    width: Math.max(0.01, Math.min(1, bbox.width ?? 0)),
-                    height: Math.max(0.01, Math.min(1, bbox.height ?? 0)),
-                };
-                try {
-                    croppedImage = await cropImageByBBox(imageDataUrl, safeBox);
-                } catch (err) {
-                    console.error("Failed to crop image for problem", err);
-                }
+            if (!response.ok) {
+                throw new Error("Failed to parse problems");
             }
 
-            hydrated.push(
-                new Problem({
-                    id: createId(),
-                    title: raw.title || `${labelPrefix} Problem ${i + 1}`,
-                    text: raw.text || "",
-                    latex: Array.isArray(raw.latex) ? raw.latex : [],
-                    sourceImage: imageDataUrl,
-                    croppedImage,
-                    bbox: raw.bbox ?? null,
-                })
-            );
-        }
+            const data = await response.json();
+            const parsedProblems = Array.isArray(data.problems) ? data.problems : [];
 
-        return hydrated;
-    }, [cropImageByBBox]);
+            const hydrated: Problem[] = [];
+
+            for (let i = 0; i < parsedProblems.length; i++) {
+                const raw = parsedProblems[i] || {};
+                const pageIndex = typeof raw.page === "number" ? raw.page - 1 : raw.page ? Number(raw.page) - 1 : 0;
+                const sourceImage = images[pageIndex] || images[0];
+                const bbox = raw.bbox as BoundingBox | undefined;
+                let croppedImage: string | undefined;
+
+                if (bbox && sourceImage) {
+                    const safeBox: BoundingBox = {
+                        x: Math.max(0, Math.min(1, bbox.x ?? 0)),
+                        y: Math.max(0, Math.min(1, bbox.y ?? 0)),
+                        width: Math.max(0.01, Math.min(1, bbox.width ?? 0)),
+                        height: Math.max(0.01, Math.min(1, bbox.height ?? 0)),
+                    };
+                    try {
+                        croppedImage = await cropImageByBBox(sourceImage, safeBox);
+                    } catch (err) {
+                        console.error("Failed to crop image for problem", err);
+                    }
+                }
+
+                hydrated.push(
+                    new Problem({
+                        id: createId(),
+                        title: raw.title || `${labelPrefix} Problem ${i + 1}`,
+                        text: raw.text || "",
+                        latex: Array.isArray(raw.latex) ? raw.latex : [],
+                        sourceImage,
+                        croppedImage,
+                        bbox: raw.bbox ?? null,
+                        page: typeof raw.page === "number" ? raw.page : undefined,
+                    })
+                );
+            }
+
+            return hydrated;
+        },
+        [cropImageByBBox]
+    );
 
     const handleFiles = useCallback(
         async (files: FileList | null) => {
@@ -348,24 +362,24 @@ export function Whiteboard() {
                         continue;
                     }
 
-                    for (let i = 0; i < pageImages.length; i++) {
-                        const pageLabel = `${labelPrefix} page ${i + 1}`;
-                        const parsed = await requestProblemsFromGemini(pageImages[i], pageLabel);
-                        if (parsed.length === 0) {
-                            // fallback: keep the whole page as one problem
+                    const parsed = await requestProblemsFromGemini(pageImages, labelPrefix);
+                    if (parsed.length === 0) {
+                        // fallback: keep each page as one problem
+                        pageImages.forEach((img, pageIdx) => {
                             newProblems.push(
                                 new Problem({
                                     id: createId(),
-                                    title: `${pageLabel} (full page)`,
+                                    title: `${labelPrefix} page ${pageIdx + 1} (full page)`,
                                     text: "",
                                     latex: [],
-                                    sourceImage: pageImages[i],
-                                    croppedImage: pageImages[i],
+                                    sourceImage: img,
+                                    croppedImage: img,
+                                    page: pageIdx + 1,
                                 })
                             );
-                        } else {
-                            newProblems.push(...parsed);
-                        }
+                        });
+                    } else {
+                        newProblems.push(...parsed);
                     }
                 }
 
@@ -400,7 +414,7 @@ export function Whiteboard() {
                 }
 
                 const dataUrl = await fileToDataUrl(blob);
-                const parsedProblems = await requestProblemsFromGemini(dataUrl, "Image");
+                const parsedProblems = await requestProblemsFromGemini([dataUrl], "Image");
 
                 if (parsedProblems.length) {
                     setProblems((prev) => [...prev, ...parsedProblems]);
@@ -628,9 +642,48 @@ export function Whiteboard() {
                 </div>
 
                 <div className="relative flex-1">
+                    <div className="pointer-events-none absolute inset-0 z-0 overflow-auto px-6 py-4">
+                        {selectedProblem ? (
+                            <div className="max-w-4xl space-y-3 text-sm leading-relaxed text-foreground">
+                                {selectedProblem.text && (
+                                    <p className="whitespace-pre-wrap text-base text-foreground">
+                                        {selectedProblem.text}
+                                    </p>
+                                )}
+                                {selectedProblem.latex && selectedProblem.latex.length > 0 && (
+                                    <div className="space-y-2">
+                                        {selectedProblem.latex.map((eq, idx) => (
+                                            <div
+                                                key={`${selectedProblem.id}-canvas-eq-${idx}`}
+                                                className="rounded-md bg-zinc-100 px-3 py-2 text-sm dark:bg-zinc-800"
+                                                dangerouslySetInnerHTML={renderLatexHtml(eq)}
+                                            />
+                                        ))}
+                                    </div>
+                                )}
+                                {!selectedProblem.text &&
+                                    (!selectedProblem.latex || selectedProblem.latex.length === 0) &&
+                                    selectedProblem.croppedImage && (
+                                        <div className="overflow-hidden rounded-md bg-zinc-100 dark:bg-zinc-800">
+                                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                                            <img
+                                                src={selectedProblem.croppedImage}
+                                                alt={selectedProblem.title}
+                                                className="max-h-[360px] w-full object-contain"
+                                            />
+                                        </div>
+                                    )}
+                            </div>
+                        ) : (
+                            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                                Upload a document to see problems here.
+                            </div>
+                        )}
+                    </div>
+
                     <canvas
                         ref={canvasRef}
-                        className="h-full w-full touch-none cursor-crosshair bg-transparent"
+                        className="relative z-10 h-full w-full touch-none cursor-crosshair bg-transparent"
                         onMouseDown={startDrawing}
                         onMouseMove={draw}
                         onMouseUp={stopDrawing}
