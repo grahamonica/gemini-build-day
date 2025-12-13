@@ -2,7 +2,13 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-First, run the development server:
+Create a .env.local file with the following variables:
+
+```bash
+GEMINI_API_KEY=your_gemini_api_key
+```
+
+Then, run the development server:
 
 ```bash
 npm run dev
