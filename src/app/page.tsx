@@ -47,7 +47,7 @@ export default function Home() {
   };
 
   return (
-    <div className="flex h-screen w-full flex-col bg-zinc-50 dark:bg-black select-none overflow-hidden overscroll-none">
+    <div className="flex h-[100dvh] w-full flex-col bg-zinc-50 dark:bg-black select-none overflow-hidden overscroll-none">
       <header className="flex-none p-4 md:p-6 pb-2 md:pb-4 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight select-none">Gemini Whiteboard</h1>
