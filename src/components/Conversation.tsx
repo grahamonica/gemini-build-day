@@ -44,7 +44,7 @@ export function Conversation({ messages }: ConversationProps) {
                         {msg.role === 'user' ? (
                             <span>Snapshot sent</span>
                         ) : (
-                            <p>{msg.content}</p>
+                            <p className="select-text cursor-text">{msg.content}</p>
                         )}
                     </div>
                 </div>
