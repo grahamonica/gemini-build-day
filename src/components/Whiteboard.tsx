@@ -1,21 +1,44 @@
 "use client";
 
 import React, { useRef, useState, useEffect, useCallback } from "react";
-import { Eraser, Pencil, Send, Trash2, Undo } from "lucide-react";
+import { Eraser, Link2, Loader2, Pencil, Send, Trash2, UploadCloud } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { BoundingBox, Problem } from "@/lib/problem";
 
 interface Point {
     x: number;
     y: number;
 }
 
+const createId = () => {
+    return typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2);
+};
+
 export function Whiteboard() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [isDrawing, setIsDrawing] = useState(false);
-    const [color, setColor] = useState("#000000"); // Default black
+    const [color, setColor] = useState("#000000");
     const [brushSize, setBrushSize] = useState(3);
     const [isSolving, setIsSolving] = useState(false);
+    const [isProcessingUpload, setIsProcessingUpload] = useState(false);
+    const [uploadError, setUploadError] = useState<string | null>(null);
+    const [imageUrlInput, setImageUrlInput] = useState("");
+    const [problems, setProblems] = useState<Problem[]>([]);
+    const [activeProblemId, setActiveProblemId] = useState<string | null>(null);
     const lastPoint = useRef<Point | null>(null);
+
+    const selectedProblem =
+        (activeProblemId && problems.find((problem) => problem.id === activeProblemId)) ||
+        problems[0] ||
+        null;
+
+    useEffect(() => {
+        if (problems.length && !activeProblemId) {
+            setActiveProblemId(problems[0].id);
+        }
+    }, [activeProblemId, problems]);
 
     // Initialize canvas size
     useEffect(() => {
@@ -28,10 +51,6 @@ export function Whiteboard() {
                 canvas.width = parent.clientWidth;
                 canvas.height = parent.clientHeight;
 
-                // Restore context settings after resize if needed, 
-                // usually resize clears canvas so we might want to save/restore image data
-                // For MVP we accept resize clears or we implement better resize logic.
-                // Let's just set context defaults again.
                 const ctx = canvas.getContext("2d");
                 if (ctx) {
                     ctx.lineCap = "round";
@@ -56,14 +75,14 @@ export function Whiteboard() {
             e.preventDefault();
         };
 
-        canvas.addEventListener('touchstart', preventDefault, { passive: false });
-        canvas.addEventListener('touchmove', preventDefault, { passive: false });
-        canvas.addEventListener('touchend', preventDefault, { passive: false });
+        canvas.addEventListener("touchstart", preventDefault, { passive: false });
+        canvas.addEventListener("touchmove", preventDefault, { passive: false });
+        canvas.addEventListener("touchend", preventDefault, { passive: false });
 
         return () => {
-            canvas.removeEventListener('touchstart', preventDefault);
-            canvas.removeEventListener('touchmove', preventDefault);
-            canvas.removeEventListener('touchend', preventDefault);
+            canvas.removeEventListener("touchstart", preventDefault);
+            canvas.removeEventListener("touchmove", preventDefault);
+            canvas.removeEventListener("touchend", preventDefault);
         };
     }, []);
 
@@ -79,9 +98,8 @@ export function Whiteboard() {
     }, [color, brushSize]);
 
     const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
-        // Prevent scrolling on touch devices
-        if ('touches' in e) {
-            // e.preventDefault(); // React synthetic events might complain, but harmless if passive: false
+        if ("touches" in e) {
+            e.preventDefault();
         }
         setIsDrawing(true);
         const { x, y } = getCoordinates(e);
@@ -90,11 +108,6 @@ export function Whiteboard() {
 
     const draw = (e: React.MouseEvent | React.TouchEvent) => {
         if (!isDrawing || !canvasRef.current || !lastPoint.current) return;
-
-        // Prevent scrolling on touch devices while drawing
-        // Note: In React, touch events are passive by default in some versions, 
-        // so e.preventDefault() might not work unless we attach non-passive listener manually.
-        // However, for style touch-action: none is the modern way.
 
         const ctx = canvasRef.current.getContext("2d");
         if (!ctx) return;
@@ -119,18 +132,30 @@ export function Whiteboard() {
         if (!canvas) return { x: 0, y: 0 };
 
         const rect = canvas.getBoundingClientRect();
-        if ('touches' in e) {
+        if ("touches" in e) {
             const touch = e.touches[0];
             return {
                 x: touch.clientX - rect.left,
-                y: touch.clientY - rect.top
-            }
+                y: touch.clientY - rect.top,
+            };
         }
         return {
             x: (e as React.MouseEvent).clientX - rect.left,
-            y: (e as React.MouseEvent).clientY - rect.top
+            y: (e as React.MouseEvent).clientY - rect.top,
         };
     };
+
+    const paintCanvasBackground = useCallback(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = brushSize;
+        }
+    }, [brushSize, color]);
 
     const clearCanvas = () => {
         const canvas = canvasRef.current;
@@ -138,6 +163,7 @@ export function Whiteboard() {
         const ctx = canvas.getContext("2d");
         if (ctx) {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
+            paintCanvasBackground();
         }
     };
 
@@ -157,18 +183,7 @@ export function Whiteboard() {
             if (!response.ok) throw new Error("Failed to solve");
 
             const data = await response.json();
-            // data.solution would be the text
-            // data.image (optional) if we render it server side, 
-            // or we can render text to canvas here.
-
-            console.log("Solution:", data.text);
-
-            // Render text on canvas for now as a simple placeholder for the next step
-            // The implementation plan says "Render Solution to Image", which implies 
-            // we might want to do that in the API or here.
-            // Let's assume the API returns text and we render it.
             renderTextToCanvas(data.text);
-
         } catch (error) {
             console.error(error);
             alert("Failed to solve equation. Check API Key.");
@@ -183,85 +198,507 @@ export function Whiteboard() {
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
 
-        // Simple text rendering for MVP
         ctx.save();
         ctx.font = "24px sans-serif";
-        ctx.fillStyle = "#ef4444"; // Red color for solution
-        // Position logic is tricky, let's just put it at bottom left or near center?
-        // Better: find empty space? Hard.
-        // Let's put it at fixed position for MVP (top left or bottom center)
+        ctx.fillStyle = "#ef4444";
         ctx.fillText(text, 50, canvas.height - 50);
         ctx.restore();
-    }
+    };
+
+    const fileToDataUrl = (file: Blob) => {
+        return new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
+    };
+
+    // Crop a normalized bounding box from a data URL image
+    const cropImageByBBox = useCallback((dataUrl: string, bbox: BoundingBox) => {
+        return new Promise<string>((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => {
+                const sx = Math.max(0, Math.floor(img.width * bbox.x));
+                const sy = Math.max(0, Math.floor(img.height * bbox.y));
+                const sw = Math.max(1, Math.floor(img.width * bbox.width));
+                const sh = Math.max(1, Math.floor(img.height * bbox.height));
+
+                const canvas = document.createElement("canvas");
+                canvas.width = sw;
+                canvas.height = sh;
+                const ctx = canvas.getContext("2d");
+                if (!ctx) return reject(new Error("No canvas context"));
+                ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+                resolve(canvas.toDataURL("image/png"));
+            };
+            img.onerror = reject;
+            img.src = dataUrl;
+        });
+    }, []);
+
+    const convertPdfToImages = useCallback(async (file: File): Promise<string[]> => {
+        // @ts-expect-error - legacy build does not ship types but is required in browsers
+        const pdfjs = await import("pdfjs-dist/legacy/build/pdf");
+
+        if (pdfjs.GlobalWorkerOptions) {
+            pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+        }
+
+        const buffer = await file.arrayBuffer();
+        const pdf = await pdfjs.getDocument({ data: buffer }).promise;
+        const pages: string[] = [];
+
+        for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const viewport = page.getViewport({ scale: 1.6 });
+            const canvas = document.createElement("canvas");
+            const context = canvas.getContext("2d");
+
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+
+            if (!context) continue;
+
+            await page.render({ canvasContext: context, viewport }).promise;
+            pages.push(canvas.toDataURL("image/png"));
+        }
+
+        return pages;
+    }, []);
+
+    const requestProblemsFromGemini = useCallback(async (imageDataUrl: string, labelPrefix: string) => {
+        const response = await fetch("/api/parse-problems", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ image: imageDataUrl }),
+        });
+
+        if (!response.ok) {
+            throw new Error("Failed to parse problems");
+        }
+
+        const data = await response.json();
+        const parsedProblems = Array.isArray(data.problems) ? data.problems : [];
+
+        const hydrated: Problem[] = [];
+
+        for (let i = 0; i < parsedProblems.length; i++) {
+            const raw = parsedProblems[i] || {};
+            const bbox = raw.bbox as BoundingBox | undefined;
+            let croppedImage: string | undefined;
+
+            if (bbox) {
+                const safeBox: BoundingBox = {
+                    x: Math.max(0, Math.min(1, bbox.x ?? 0)),
+                    y: Math.max(0, Math.min(1, bbox.y ?? 0)),
+                    width: Math.max(0.01, Math.min(1, bbox.width ?? 0)),
+                    height: Math.max(0.01, Math.min(1, bbox.height ?? 0)),
+                };
+                try {
+                    croppedImage = await cropImageByBBox(imageDataUrl, safeBox);
+                } catch (err) {
+                    console.error("Failed to crop image for problem", err);
+                }
+            }
+
+            hydrated.push(
+                new Problem({
+                    id: createId(),
+                    title: raw.title || `${labelPrefix} Problem ${i + 1}`,
+                    text: raw.text || "",
+                    latex: Array.isArray(raw.latex) ? raw.latex : [],
+                    sourceImage: imageDataUrl,
+                    croppedImage,
+                    bbox: raw.bbox ?? null,
+                })
+            );
+        }
+
+        return hydrated;
+    }, [cropImageByBBox]);
+
+    const handleFiles = useCallback(
+        async (files: FileList | null) => {
+            if (!files?.length) return;
+            setUploadError(null);
+            setIsProcessingUpload(true);
+
+            try {
+                const newProblems: Problem[] = [];
+
+                for (const file of Array.from(files)) {
+                    const labelPrefix = file.name || "Upload";
+                    const pageImages: string[] = [];
+
+                    if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+                        const pages = await convertPdfToImages(file);
+                        pageImages.push(...pages);
+                    } else if (file.type.startsWith("image/")) {
+                        const dataUrl = await fileToDataUrl(file);
+                        pageImages.push(dataUrl);
+                    } else {
+                        setUploadError("Upload a PDF or image file.");
+                        continue;
+                    }
+
+                    for (let i = 0; i < pageImages.length; i++) {
+                        const pageLabel = `${labelPrefix} page ${i + 1}`;
+                        const parsed = await requestProblemsFromGemini(pageImages[i], pageLabel);
+                        if (parsed.length === 0) {
+                            // fallback: keep the whole page as one problem
+                            newProblems.push(
+                                new Problem({
+                                    id: createId(),
+                                    title: `${pageLabel} (full page)`,
+                                    text: "",
+                                    latex: [],
+                                    sourceImage: pageImages[i],
+                                    croppedImage: pageImages[i],
+                                })
+                            );
+                        } else {
+                            newProblems.push(...parsed);
+                        }
+                    }
+                }
+
+                if (newProblems.length) {
+                    setProblems((prev) => [...prev, ...newProblems]);
+                    setActiveProblemId((prev) => prev ?? newProblems[0]?.id ?? null);
+                }
+            } catch (error) {
+                console.error(error);
+                setUploadError("We couldn't parse that document. Try again.");
+            } finally {
+                setIsProcessingUpload(false);
+            }
+        },
+        [convertPdfToImages, requestProblemsFromGemini]
+    );
+
+    const handleImageUrlSubmit = useCallback(
+        async (event: React.FormEvent<HTMLFormElement>) => {
+            event.preventDefault();
+            if (!imageUrlInput.trim()) return;
+
+            setUploadError(null);
+            setIsProcessingUpload(true);
+
+            try {
+                const response = await fetch(imageUrlInput.trim());
+                if (!response.ok) throw new Error("Bad response");
+                const blob = await response.blob();
+                if (!blob.type.startsWith("image/")) {
+                    throw new Error("Not an image");
+                }
+
+                const dataUrl = await fileToDataUrl(blob);
+                const parsedProblems = await requestProblemsFromGemini(dataUrl, "Image");
+
+                if (parsedProblems.length) {
+                    setProblems((prev) => [...prev, ...parsedProblems]);
+                    setActiveProblemId((prev) => prev ?? parsedProblems[0]?.id ?? null);
+                }
+                setImageUrlInput("");
+            } catch (error) {
+                console.error(error);
+                setUploadError("Unable to fetch or parse that image. Make sure the link is public.");
+            } finally {
+                setIsProcessingUpload(false);
+            }
+        },
+        [imageUrlInput, requestProblemsFromGemini]
+    );
+
+    const onDropUpload = (event: React.DragEvent<HTMLLabelElement>) => {
+        event.preventDefault();
+        handleFiles(event.dataTransfer.files);
+    };
+
+    const wrapText = (
+        ctx: CanvasRenderingContext2D,
+        text: string,
+        x: number,
+        y: number,
+        maxWidth: number,
+        lineHeight: number
+    ) => {
+        const words = text.split(" ");
+        let line = "";
+        let cursorY = y;
+
+        for (let n = 0; n < words.length; n++) {
+            const testLine = line + words[n] + " ";
+            const metrics = ctx.measureText(testLine);
+            const testWidth = metrics.width;
+            if (testWidth > maxWidth && n > 0) {
+                ctx.fillText(line, x, cursorY);
+                line = words[n] + " ";
+                cursorY += lineHeight;
+            } else {
+                line = testLine;
+            }
+        }
+        ctx.fillText(line, x, cursorY);
+        return cursorY + lineHeight;
+    };
+
+    const renderProblemToCanvas = useCallback(
+        (problem: Problem | null) => {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) return;
+
+            const drawProblem = (imageSrc?: string) => {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                paintCanvasBackground();
+
+                let yOffset = 24;
+                const margin = 20;
+                const maxWidth = canvas.width - margin * 2;
+
+                if (imageSrc) {
+                    const img = new Image();
+                    img.onload = () => {
+                        const scale = Math.min(
+                            maxWidth / img.width,
+                            (canvas.height * 0.35) / img.height,
+                            1
+                        );
+                        const w = img.width * scale;
+                        const h = img.height * scale;
+                        const x = (canvas.width - w) / 2;
+                        ctx.drawImage(img, x, margin, w, h);
+                        yOffset = margin + h + 20;
+
+                        ctx.fillStyle = "#0f172a";
+                        ctx.font = "18px sans-serif";
+                        ctx.textBaseline = "top";
+                        yOffset = wrapText(ctx, problem?.text || "No text detected.", margin, yOffset, maxWidth, 22);
+
+                        if (problem?.latex && problem.latex.length) {
+                            yOffset += 8;
+                            ctx.fillStyle = "#111827";
+                            ctx.font = "16px monospace";
+                            problem.latex.forEach((eq) => {
+                                yOffset = wrapText(ctx, `LaTeX: ${eq}`, margin, yOffset, maxWidth, 20);
+                            });
+                        }
+
+                        ctx.strokeStyle = color;
+                        ctx.lineWidth = brushSize;
+                    };
+                    img.src = imageSrc;
+                } else {
+                    ctx.fillStyle = "#0f172a";
+                    ctx.font = "18px sans-serif";
+                    ctx.textBaseline = "top";
+                    yOffset = wrapText(ctx, problem?.text || "No text detected.", margin, yOffset, maxWidth, 22);
+
+                    if (problem?.latex && problem.latex.length) {
+                        yOffset += 8;
+                        ctx.fillStyle = "#111827";
+                        ctx.font = "16px monospace";
+                        problem.latex.forEach((eq) => {
+                            yOffset = wrapText(ctx, `LaTeX: ${eq}`, margin, yOffset, maxWidth, 20);
+                        });
+                    }
+
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = brushSize;
+                }
+            };
+
+            if (!problem) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                paintCanvasBackground();
+                return;
+            }
+
+            drawProblem(problem.croppedImage || problem.sourceImage);
+        },
+        [brushSize, color, paintCanvasBackground]
+    );
+
+    useEffect(() => {
+        renderProblemToCanvas(selectedProblem || null);
+    }, [selectedProblem, renderProblemToCanvas]);
 
     return (
-        <div className="relative w-full h-full bg-white dark:bg-zinc-950 rounded-xl overflow-hidden shadow-sm border border-border">
-            {/* Canvas */}
-            <canvas
-                ref={canvasRef}
-                className="w-full h-full touch-none cursor-crosshair"
-                onMouseDown={startDrawing}
-                onMouseMove={draw}
-                onMouseUp={stopDrawing}
-                onMouseLeave={stopDrawing}
-                onTouchStart={startDrawing}
-                onTouchMove={draw}
-                onTouchEnd={stopDrawing}
-            />
+        <div className="flex h-full w-full flex-col gap-4">
+            <div className="rounded-xl border border-border bg-white/80 p-4 shadow-sm dark:bg-zinc-950/80">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div className="flex flex-wrap items-center gap-3">
+                        <label
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={onDropUpload}
+                            className="flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-border bg-zinc-50 px-3 py-2 text-sm font-medium transition hover:border-zinc-300 dark:bg-zinc-900"
+                        >
+                            <UploadCloud className="h-4 w-4" />
+                            <span>Upload PDF or image</span>
+                            <input
+                                type="file"
+                                accept="image/*,.pdf,application/pdf"
+                                className="hidden"
+                                multiple
+                                onChange={(event) => handleFiles(event.target.files)}
+                            />
+                        </label>
+                        <form onSubmit={handleImageUrlSubmit} className="flex items-center gap-2">
+                            <div className="relative">
+                                <Link2 className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                                <input
+                                    value={imageUrlInput}
+                                    onChange={(e) => setImageUrlInput(e.target.value)}
+                                    className="w-48 rounded-lg border border-border bg-transparent py-2 pl-8 pr-3 text-sm outline-none focus:ring-2 focus:ring-black/60 dark:focus:ring-white/60"
+                                    placeholder="Paste image URL"
+                                />
+                            </div>
+                            <button
+                                type="submit"
+                                disabled={isProcessingUpload}
+                                className="rounded-lg bg-black px-3 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50 dark:bg-white dark:text-black"
+                            >
+                                Add
+                            </button>
+                        </form>
+                        {isProcessingUpload && (
+                            <span className="flex items-center gap-2 text-sm text-muted-foreground">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                Processing...
+                            </span>
+                        )}
+                    </div>
+                    {uploadError && <p className="text-sm text-red-500">{uploadError}</p>}
+                </div>
 
-            {/* Toolbar */}
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-2 p-2 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-sm rounded-full shadow-lg border border-border">
-                <button
-                    onClick={() => setColor("#000000")}
-                    className={cn("p-2 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors", color === "#000000" && "bg-zinc-100 dark:bg-zinc-800")}
-                >
-                    <Pencil className="w-5 h-5 text-black dark:text-white" />
-                </button>
-                <button
-                    onClick={() => setColor("#ef4444")} // Red pen
-                    className={cn("p-2 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors", color === "#ef4444" && "bg-zinc-100 dark:bg-zinc-800")}
-                >
-                    <div className="w-5 h-5 rounded-full bg-red-500 border border-zinc-200" />
-                </button>
-                {/* Eraser just paints white/background? Or composite operation? */}
-                <button
-                    onClick={() => {
-                        // Simple eraser: paint with background color
-                        setColor("#ffffff");
-                        // But wait, in dark mode bg is different.
-                        // We need a real eraser mode which uses globalCompositeOperation = 'destination-out'
-                    }}
-                    className={cn("p-2 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors")}
-                >
-                    <Eraser className="w-5 h-5" />
-                </button>
-
-                <div className="w-px h-6 bg-zinc-200 dark:bg-zinc-800 mx-1" />
-
-                <button
-                    onClick={clearCanvas}
-                    className="p-2 rounded-full hover:bg-red-50 text-red-500 transition-colors"
-                >
-                    <Trash2 className="w-5 h-5" />
-                </button>
+                <div className="mt-4 rounded-lg border border-border bg-zinc-50 p-3 dark:bg-zinc-900">
+                    <div className="flex items-center justify-between text-sm font-semibold">
+                        <span>Problems</span>
+                        <span className="text-muted-foreground">{problems.length || 0}</span>
+                    </div>
+                    <div className="mt-2 space-y-2 max-h-48 overflow-auto">
+                        {problems.length === 0 && (
+                            <p className="text-sm text-muted-foreground">
+                                Upload a PDF or image and we will split it into problems for you.
+                            </p>
+                        )}
+                        {problems.length > 0 &&
+                            problems.map((problem, index) => (
+                                <label
+                                    key={problem.id}
+                                    className={cn(
+                                        "flex cursor-pointer items-center gap-2 rounded-md border border-transparent px-2 py-2 text-sm transition",
+                                        activeProblemId === problem.id && "border-black/30 bg-white shadow-sm dark:border-white/40"
+                                    )}
+                                >
+                                    <input
+                                        type="checkbox"
+                                        className="h-4 w-4 cursor-pointer accent-black dark:accent-white"
+                                        checked={activeProblemId === problem.id}
+                                        onChange={() => setActiveProblemId(problem.id)}
+                                    />
+                                    <span className="truncate">
+                                        {problems.length === 1 ? "Problem" : `Problem ${index + 1}`} - {problem.title}
+                                    </span>
+                                </label>
+                            ))}
+                    </div>
+                </div>
             </div>
 
-            {/* Action Button */}
-            <div className="absolute bottom-6 right-6">
-                <button
-                    onClick={solveEquation}
-                    disabled={isSolving}
-                    className="flex items-center gap-2 px-6 py-3 bg-black dark:bg-white text-white dark:text-black rounded-full font-medium shadow-lg hover:shadow-xl hover:scale-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                    {isSolving ? (
-                        <span className="animate-pulse">Solving...</span>
-                    ) : (
-                        <>
-                            <span>Solve</span>
-                            <Send className="w-4 h-4 ml-1" />
-                        </>
-                    )}
-                </button>
+            <div className="relative flex min-h-[360px] flex-1 flex-col overflow-hidden rounded-xl border border-border bg-white shadow-sm dark:bg-zinc-950">
+                <div className="flex items-center justify-between gap-3 border-b border-border bg-zinc-50 px-4 py-2 text-sm font-medium dark:bg-zinc-900">
+                    <span>Problem is rendered inside the canvas — draw your solution on top.</span>
+                    <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-2 rounded-lg bg-white px-3 py-1.5 text-xs font-medium shadow-sm ring-1 ring-border dark:bg-zinc-950">
+                            <span>Brush</span>
+                            <input
+                                type="range"
+                                min={1}
+                                max={12}
+                                value={brushSize}
+                                onChange={(e) => setBrushSize(Number(e.target.value))}
+                                className="h-2 cursor-pointer"
+                            />
+                        </label>
+                    </div>
+                </div>
+                <div className="relative flex-1">
+                    <canvas
+                        ref={canvasRef}
+                        className="h-full w-full touch-none cursor-crosshair bg-transparent"
+                        onMouseDown={startDrawing}
+                        onMouseMove={draw}
+                        onMouseUp={stopDrawing}
+                        onMouseLeave={stopDrawing}
+                        onTouchStart={startDrawing}
+                        onTouchMove={draw}
+                        onTouchEnd={stopDrawing}
+                    />
+
+                    <div className="absolute left-1/2 top-4 flex -translate-x-1/2 items-center gap-2 rounded-full border border-border bg-white/90 px-2 py-1 shadow-lg backdrop-blur-sm dark:bg-zinc-900/90">
+                        <button
+                            onClick={() => setColor("#000000")}
+                            className={cn(
+                                "p-2 rounded-full transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800",
+                                color === "#000000" && "bg-zinc-100 dark:bg-zinc-800"
+                            )}
+                            aria-label="Black pen"
+                        >
+                            <Pencil className="h-5 w-5 text-black dark:text-white" />
+                        </button>
+                        <button
+                            onClick={() => setColor("#ef4444")}
+                            className={cn(
+                                "p-2 rounded-full transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800",
+                                color === "#ef4444" && "bg-zinc-100 dark:bg-zinc-800"
+                            )}
+                            aria-label="Red pen"
+                        >
+                            <div className="h-5 w-5 rounded-full border border-zinc-200 bg-red-500" />
+                        </button>
+                        <button
+                            onClick={() => setColor("#ffffff")}
+                            className="p-2 rounded-full transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                            aria-label="Eraser"
+                        >
+                            <Eraser className="h-5 w-5" />
+                        </button>
+
+                        <div className="mx-1 h-6 w-px bg-zinc-200 dark:bg-zinc-800" />
+
+                        <button
+                            onClick={clearCanvas}
+                            className="p-2 text-red-500 transition-colors hover:bg-red-50 rounded-full"
+                            aria-label="Clear canvas"
+                        >
+                            <Trash2 className="h-5 w-5" />
+                        </button>
+                    </div>
+
+                    <div className="absolute bottom-5 right-5">
+                        <button
+                            onClick={solveEquation}
+                            disabled={isSolving}
+                            className="flex items-center gap-2 rounded-full bg-black px-6 py-3 font-medium text-white shadow-lg transition-all hover:scale-105 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-black"
+                        >
+                            {isSolving ? (
+                                <>
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    <span>Solving...</span>
+                                </>
+                            ) : (
+                                <>
+                                    <span>Solve</span>
+                                    <Send className="h-4 w-4" />
+                                </>
+                            )}
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
     );
