@@ -161,12 +161,14 @@ export function Whiteboard() {
         const dragDuration = Date.now() - dragStartTime.current;
 
         // Logic: specific time threshold for "work unit"
-        if (dragDuration > 500) {
-            // Schedule capture
-            idleTimer.current = setTimeout(() => {
-                captureAndSend();
-            }, 1000); // 1s pause
-        }
+        // Logic: specific time threshold for "work unit"
+        // We removed the > 500ms check because short strokes (handwriting) were being ignored.
+        // Now any stroke triggers the idle timer.
+        
+        // Schedule capture
+        idleTimer.current = setTimeout(() => {
+            captureAndSend();
+        }, 1000); // 1s pause
     };
 
     const getCoordinates = (e: React.MouseEvent | React.TouchEvent): Point => {
