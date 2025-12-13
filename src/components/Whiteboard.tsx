@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useRef, useState, useEffect, useCallback } from "react";
-import { Eraser, Pencil, Trash2 } from "lucide-react";
+import { Eraser, Pencil, Trash2, Video, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Conversation, Message } from "./Conversation";
 
@@ -10,17 +10,26 @@ interface Point {
     y: number;
 }
 
+interface Frame {
+    imageData: string;
+    timestamp: number;
+}
+
 export function Whiteboard() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [isDrawing, setIsDrawing] = useState(false);
     const [color, setColor] = useState("#000000");
     const [brushSize, setBrushSize] = useState(3);
     const [messages, setMessages] = useState<Message[]>([]);
+    const [frames, setFrames] = useState<Frame[]>([]);
+    const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
+    const [videoUrl, setVideoUrl] = useState<string | null>(null);
 
     // Timing refs
     const dragStartTime = useRef<number>(0);
     const idleTimer = useRef<NodeJS.Timeout | null>(null);
     const lastPoint = useRef<Point | null>(null);
+    const frameCaptureInterval = useRef<NodeJS.Timeout | null>(null);
 
     // Initialize canvas size
     useEffect(() => {
@@ -196,6 +205,94 @@ export function Whiteboard() {
             ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
         setMessages([]); // Clear conversation on canvas clear? Maybe optional.
+        setFrames([]); // Clear frames when canvas is cleared
+        setVideoUrl(null); // Clear video URL
+    };
+
+    // Capture frame periodically while drawing
+    const startFrameCapture = useCallback(() => {
+        if (frameCaptureInterval.current) return; // Already capturing
+        
+        frameCaptureInterval.current = setInterval(() => {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            
+            const imageData = canvas.toDataURL("image/png");
+            setFrames((prev: Frame[]) => {
+                const newFrame: Frame = {
+                    imageData,
+                    timestamp: Date.now()
+                };
+                // Only keep frames from the last 5 minutes to avoid memory issues
+                const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+                const filtered = prev.filter((f: Frame) => f.timestamp > fiveMinutesAgo);
+                return [...filtered, newFrame];
+            });
+        }, 500); // Capture every 500ms
+    }, []);
+
+    const stopFrameCapture = useCallback(() => {
+        if (frameCaptureInterval.current) {
+            clearInterval(frameCaptureInterval.current);
+            frameCaptureInterval.current = null;
+        }
+    }, []);
+
+    // Start capturing frames when user starts drawing
+    useEffect(() => {
+        if (isDrawing) {
+            startFrameCapture();
+        } else {
+            // Continue capturing for a bit after drawing stops
+            const timeout = setTimeout(() => {
+                stopFrameCapture();
+            }, 2000);
+            return () => clearTimeout(timeout);
+        }
+    }, [isDrawing, startFrameCapture, stopFrameCapture]);
+
+    // Cleanup on unmount
+    useEffect(() => {
+        return () => {
+            stopFrameCapture();
+        };
+    }, [stopFrameCapture]);
+
+    const generateVideo = async () => {
+        if (!canvasRef.current || frames.length === 0) {
+            alert("No drawing history to create video from. Please draw something first.");
+            return;
+        }
+
+        setIsGeneratingVideo(true);
+        setVideoUrl(null);
+
+        try {
+            // Capture current state as final frame
+            const currentFrame = canvasRef.current.toDataURL("image/png");
+            const allFrames = [...frames, { imageData: currentFrame, timestamp: Date.now() }];
+
+            const response = await fetch("/api/nano-banana", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    frames: allFrames.map(f => f.imageData)
+                }),
+            });
+
+            if (!response.ok) {
+                throw new Error("Failed to generate video");
+            }
+
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            setVideoUrl(url);
+        } catch (error) {
+            console.error("Error generating video:", error);
+            alert("Failed to generate video. Please try again.");
+        } finally {
+            setIsGeneratingVideo(false);
+        }
     };
 
     return (
@@ -240,12 +337,60 @@ export function Whiteboard() {
                 <div className="w-px h-6 bg-zinc-200 dark:bg-zinc-800 mx-1" />
 
                 <button
+                    onClick={generateVideo}
+                    disabled={isGeneratingVideo || frames.length === 0}
+                    className={cn(
+                        "p-2 rounded-full transition-colors flex items-center gap-2",
+                        isGeneratingVideo || frames.length === 0
+                            ? "opacity-50 cursor-not-allowed"
+                            : "hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-600 dark:text-blue-400"
+                    )}
+                    title="Nano Banana - Create animated video"
+                >
+                    {isGeneratingVideo ? (
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                        <Video className="w-5 h-5" />
+                    )}
+                </button>
+
+                <div className="w-px h-6 bg-zinc-200 dark:bg-zinc-800 mx-1" />
+
+                <button
                     onClick={clearCanvas}
                     className="p-2 rounded-full hover:bg-red-50 text-red-500 transition-colors"
                 >
                     <Trash2 className="w-5 h-5" />
                 </button>
             </div>
+
+            {/* Video Player */}
+            {videoUrl && (
+                <div className="absolute bottom-4 left-4 right-4 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-sm rounded-xl shadow-lg border border-border z-20 p-4">
+                    <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-sm font-semibold">Generated Video</h3>
+                        <button
+                            onClick={() => setVideoUrl(null)}
+                            className="text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                        >
+                            ×
+                        </button>
+                    </div>
+                    <video
+                        src={videoUrl}
+                        controls
+                        className="w-full rounded-lg"
+                        autoPlay
+                    />
+                    <a
+                        href={videoUrl}
+                        download="whiteboard-animation.mp4"
+                        className="mt-2 inline-block text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                    >
+                        Download Video
+                    </a>
+                </div>
+            )}
         </div>
     );
 }

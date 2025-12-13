@@ -8,6 +8,23 @@ Create a .env.local file with the following variables:
 GEMINI_API_KEY=your_gemini_api_key
 ```
 
+## Video Generation (Nano Banana)
+
+The whiteboard includes a video generation feature that creates animated videos from your drawings. To use this feature:
+
+1. **Install FFmpeg** (required for video generation):
+   - **macOS**: `brew install ffmpeg`
+   - **Linux**: `sudo apt-get install ffmpeg` or `sudo yum install ffmpeg`
+   - **Windows**: Download from [ffmpeg.org](https://ffmpeg.org/download.html)
+
+2. **Usage**:
+   - Draw on the whiteboard
+   - Click the video icon (🎥) button in the toolbar to generate an animated video
+   - The video will show your drawing process as an animation
+   - You can download the generated video
+
+The system automatically captures frames while you're drawing (every 500ms) and creates a smooth animation from your drawing process.
+
 Then, run the development server:
 
 ```bash
