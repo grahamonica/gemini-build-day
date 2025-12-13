@@ -20,18 +20,22 @@ export function Conversation({ messages }: ConversationProps) {
         }
     }, [messages]);
 
-    if (messages.length === 0) return null;
+    if (messages.length === 0) return (
+        <div className="h-full w-full flex items-center justify-center text-muted-foreground text-sm p-4 text-center border-l border-border bg-zinc-50 dark:bg-zinc-900/50">
+            Start drawing to chat with AI...
+        </div>
+    );
 
     return (
         <div
             ref={scrollRef}
-            className="absolute top-4 right-4 w-80 max-h-[calc(100vh-2rem)] overflow-y-auto bg-white/95 dark:bg-zinc-900/95 backdrop-blur-sm rounded-xl shadow-lg border border-border flex flex-col gap-4 p-4 z-10"
+            className="h-full w-full overflow-y-auto bg-white dark:bg-zinc-900 border-l border-border flex flex-col gap-4 p-4"
         >
             {messages.map((msg) => (
                 <div
                     key={msg.id}
                     className={cn(
-                        "flex flex-col gap-1 max-w-[85%]",
+                        "flex flex-col gap-1 max-w-[95%]",
                         msg.role === 'user' ? "self-end items-end" : "self-start items-start"
                     )}
                 >
@@ -44,7 +48,7 @@ export function Conversation({ messages }: ConversationProps) {
                         {msg.role === 'user' ? (
                             <span>Snapshot sent</span>
                         ) : (
-                            <p className="select-text cursor-text">{msg.content}</p>
+                            <p>{msg.content}</p>
                         )}
                     </div>
                 </div>
