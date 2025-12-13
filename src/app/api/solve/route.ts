@@ -89,6 +89,8 @@ export async function POST(req: NextRequest) {
             history: chatHistory,
         });
 
+        console.log("Sending message to Gemini with image and history");
+        
         const result = await chat.sendMessage([
             {
                 inlineData: {
@@ -101,13 +103,38 @@ export async function POST(req: NextRequest) {
 
         const response = await result.response;
         const text = response.text();
+        
+        console.log("Gemini response received:", text.substring(0, 100) + "...");
 
         return NextResponse.json({ text });
-    } catch (error) {
+    } catch (error: any) {
         console.error("Error processing with Gemini:", error);
+        
+        // Provide more specific error messages
+        let errorMessage = "Internal Server Error during AI processing";
+        let statusCode = 500;
+        
+        if (error.message) {
+            errorMessage = error.message;
+        } else if (error instanceof Error) {
+            errorMessage = error.message;
+        }
+        
+        // Check for specific Gemini API errors
+        if (errorMessage.includes("API_KEY") || errorMessage.includes("api key") || errorMessage.includes("API key")) {
+            errorMessage = "Invalid or missing GEMINI_API_KEY. Please check your .env.local file.";
+            statusCode = 401;
+        } else if (errorMessage.includes("quota") || errorMessage.includes("rate limit") || errorMessage.includes("429") || errorMessage.includes("RESOURCE_EXHAUSTED")) {
+            errorMessage = "API quota exceeded. The free tier has limits. Please wait a few minutes or upgrade your Google Cloud billing account for higher quotas.";
+            statusCode = 429;
+        } else if (errorMessage.includes("network") || errorMessage.includes("fetch")) {
+            errorMessage = "Network error. Please check your internet connection.";
+            statusCode = 503;
+        }
+        
         return NextResponse.json(
-            { error: "Internal Server Error during AI processing" },
-            { status: 500 }
+            { error: errorMessage },
+            { status: statusCode }
         );
     }
 }
