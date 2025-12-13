@@ -18,7 +18,7 @@ const createId = () => {
         : Math.random().toString(36).slice(2);
 };
 
-export function Whiteboard() {
+export function Whiteboard({ onCapture }: { onCapture?: (imageData: string) => void } = {}) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [isDrawing, setIsDrawing] = useState(false);
     const [color, setColor] = useState("#000000");
@@ -30,6 +30,15 @@ export function Whiteboard() {
     const [problems, setProblems] = useState<Problem[]>([]);
     const [activeProblemId, setActiveProblemId] = useState<string | null>(null);
     const lastPoint = useRef<Point | null>(null);
+
+    // State for zoom and pan
+    const transform = useRef({ x: 0, y: 0, scale: 1 });
+    const idleTimer = useRef<NodeJS.Timeout | null>(null);
+
+    // Touch State for Gestures
+    const lastTouchDistance = useRef<number>(0);
+    const lastTouchCenter = useRef<Point>({ x: 0, y: 0 });
+    const isGesturing = useRef(false);
 
     const selectedProblem = useMemo(
         () =>
@@ -44,6 +53,40 @@ export function Whiteboard() {
             setActiveProblemId(problems[0].id);
         }
     }, [activeProblemId, problems]);
+
+    // --- Helpers for zoom/pan ---
+
+    const screenToWorld = (x: number, y: number): Point => {
+        return {
+            x: (x - transform.current.x) / transform.current.scale,
+            y: (y - transform.current.y) / transform.current.scale
+        };
+    };
+
+    const getCoordinates = (e: React.MouseEvent | React.TouchEvent): Point => {
+        const canvas = canvasRef.current;
+        if (!canvas) return { x: 0, y: 0 };
+
+        const rect = canvas.getBoundingClientRect();
+        if ("touches" in e) {
+            const touch = e.touches[0];
+            return screenToWorld(touch.clientX - rect.left, touch.clientY - rect.top);
+        }
+        return screenToWorld((e as React.MouseEvent).clientX - rect.left, (e as React.MouseEvent).clientY - rect.top);
+    };
+
+    // --- AI Integration ---
+
+    const triggerCapture = () => {
+        if (!canvasRef.current) return;
+        const imageData = canvasRef.current.toDataURL("image/png");
+        onCapture?.(imageData);
+    };
+
+    const scheduleCapture = () => {
+        if (idleTimer.current) clearTimeout(idleTimer.current);
+        idleTimer.current = setTimeout(triggerCapture, 1000);
+    };
 
     // Initialize canvas size
     useEffect(() => {
@@ -106,6 +149,7 @@ export function Whiteboard() {
         if ("touches" in e) {
             e.preventDefault();
         }
+        if (idleTimer.current) clearTimeout(idleTimer.current);
         setIsDrawing(true);
         const { x, y } = getCoordinates(e);
         lastPoint.current = { x, y };
@@ -119,10 +163,13 @@ export function Whiteboard() {
 
         const { x, y } = getCoordinates(e);
 
+        ctx.save();
+        ctx.setTransform(transform.current.scale, 0, 0, transform.current.scale, transform.current.x, transform.current.y);
         ctx.beginPath();
         ctx.moveTo(lastPoint.current.x, lastPoint.current.y);
         ctx.lineTo(x, y);
         ctx.stroke();
+        ctx.restore();
 
         lastPoint.current = { x, y };
     };
@@ -130,25 +177,82 @@ export function Whiteboard() {
     const stopDrawing = () => {
         setIsDrawing(false);
         lastPoint.current = null;
+        if (onCapture) scheduleCapture();
     };
 
-    const getCoordinates = (e: React.MouseEvent | React.TouchEvent): Point => {
-        const canvas = canvasRef.current;
-        if (!canvas) return { x: 0, y: 0 };
+    const handleTouchStart = (e: React.TouchEvent) => {
+        e.preventDefault();
+        const rect = canvasRef.current?.getBoundingClientRect();
+        if (!rect) return;
 
-        const rect = canvas.getBoundingClientRect();
-        if ("touches" in e) {
-            const touch = e.touches[0];
-            return {
-                x: touch.clientX - rect.left,
-                y: touch.clientY - rect.top,
+        if (e.touches.length === 1) {
+            // Start Drawing
+            startDrawing(e);
+            isGesturing.current = false;
+        } else if (e.touches.length === 2) {
+            // Start Gesture
+            setIsDrawing(false);
+            lastPoint.current = null;
+            isGesturing.current = true;
+
+            const t1 = e.touches[0];
+            const t2 = e.touches[1];
+            lastTouchDistance.current = Math.sqrt((t1.clientX - t2.clientX) ** 2 + (t1.clientY - t2.clientY) ** 2);
+            lastTouchCenter.current = {
+                x: (t1.clientX + t2.clientX) / 2 - rect.left,
+                y: (t1.clientY + t2.clientY) / 2 - rect.top
             };
         }
-        return {
-            x: (e as React.MouseEvent).clientX - rect.left,
-            y: (e as React.MouseEvent).clientY - rect.top,
-        };
     };
+
+    const handleTouchMove = (e: React.TouchEvent) => {
+        e.preventDefault();
+        const rect = canvasRef.current?.getBoundingClientRect();
+        if (!rect) return;
+
+        if (isDrawing && e.touches.length === 1) {
+            draw(e);
+        } else if (isGesturing.current && e.touches.length === 2) {
+            const t1 = e.touches[0];
+            const t2 = e.touches[1];
+            const dist = Math.sqrt((t1.clientX - t2.clientX) ** 2 + (t1.clientY - t2.clientY) ** 2);
+            const center = {
+                x: (t1.clientX + t2.clientX) / 2 - rect.left,
+                y: (t1.clientY + t2.clientY) / 2 - rect.top
+            };
+
+            // Pan
+            const dx = center.x - lastTouchCenter.current.x;
+            const dy = center.y - lastTouchCenter.current.y;
+            transform.current.x += dx;
+            transform.current.y += dy;
+
+            // Zoom
+            if (lastTouchDistance.current > 0) {
+                const scaleFactor = dist / lastTouchDistance.current;
+                const oldScale = transform.current.scale;
+                transform.current.scale *= scaleFactor;
+                // Adjust translation to zoom towards center
+                transform.current.x = center.x - (center.x - transform.current.x) * scaleFactor;
+                transform.current.y = center.y - (center.y - transform.current.y) * scaleFactor;
+            }
+
+            lastTouchDistance.current = dist;
+            lastTouchCenter.current = center;
+
+            // Re-render
+            // renderProblemToCanvas(selectedProblem);
+        }
+    };
+
+    const handleTouchEnd = (e: React.TouchEvent) => {
+        if (isDrawing && e.touches.length === 0) {
+            stopDrawing();
+        } else if (isGesturing.current && e.touches.length < 2) {
+            isGesturing.current = false;
+        }
+    };
+
 
     const paintCanvasBackground = useCallback(() => {
         const canvas = canvasRef.current;
@@ -688,9 +792,9 @@ export function Whiteboard() {
                         onMouseMove={draw}
                         onMouseUp={stopDrawing}
                         onMouseLeave={stopDrawing}
-                        onTouchStart={startDrawing}
-                        onTouchMove={draw}
-                        onTouchEnd={stopDrawing}
+                        onTouchStart={handleTouchStart}
+                        onTouchMove={handleTouchMove}
+                        onTouchEnd={handleTouchEnd}
                     />
                 </div>
             </div>
