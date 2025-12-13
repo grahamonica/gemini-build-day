@@ -44,3 +44,4 @@ next-env.d.ts
 # video generation temp files
 /temp
 /public/snapshots
+/public/temp-images

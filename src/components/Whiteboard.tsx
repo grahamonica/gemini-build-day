@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useRef, useState, useEffect, useCallback } from "react";
-import { Eraser, Pencil, Trash2, Video, Loader2 } from "lucide-react";
+import { Eraser, Pencil, Trash2, Video, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Conversation, Message } from "./Conversation";
 
@@ -30,6 +30,11 @@ export function Whiteboard() {
     const idleTimer = useRef<NodeJS.Timeout | null>(null);
     const lastPoint = useRef<Point | null>(null);
     const frameCaptureInterval = useRef<NodeJS.Timeout | null>(null);
+    
+    // Video generation cancellation
+    const abortControllerRef = useRef<AbortController | null>(null);
+    const gifInstanceRef = useRef<any>(null);
+    const isCancelledRef = useRef<boolean>(false);
 
     // Initialize canvas size
     useEffect(() => {
@@ -258,6 +263,28 @@ export function Whiteboard() {
         };
     }, [stopFrameCapture]);
 
+    const cancelVideoGeneration = useCallback(() => {
+        isCancelledRef.current = true;
+        
+        // Cancel fetch request if active
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+        }
+        
+        // Cancel GIF generation if active
+        if (gifInstanceRef.current) {
+            try {
+                // GIF.js doesn't have a direct cancel method, but we can stop it
+                gifInstanceRef.current = null;
+            } catch (e) {
+                // Ignore errors
+            }
+        }
+        
+        setIsGeneratingVideo(false);
+    }, []);
+
     const generateVideo = async () => {
         if (!canvasRef.current || frames.length === 0) {
             alert("No drawing history to create video from. Please draw something first.");
@@ -266,34 +293,197 @@ export function Whiteboard() {
 
         setIsGeneratingVideo(true);
         setVideoUrl(null);
+        isCancelledRef.current = false;
+        abortControllerRef.current = new AbortController();
+        gifInstanceRef.current = null;
 
         try {
             // Capture current state as final frame
             const currentFrame = canvasRef.current.toDataURL("image/png");
             const allFrames = [...frames, { imageData: currentFrame, timestamp: Date.now() }];
 
-            const response = await fetch("/api/nano-banana", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    frames: allFrames.map(f => f.imageData)
-                }),
-            });
-
-            if (!response.ok) {
-                throw new Error("Failed to generate video");
+            // Check if cancelled before starting
+            if (isCancelledRef.current) {
+                return;
             }
 
-            const blob = await response.blob();
+            // Try server-side video generation first
+            try {
+                const response = await fetch("/api/nano-banana", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        frames: allFrames.map(f => f.imageData)
+                    }),
+                    signal: abortControllerRef.current.signal,
+                });
+
+                // Check if cancelled after fetch
+                if (isCancelledRef.current) {
+                    return;
+                }
+
+                if (response.ok) {
+                    const contentType = response.headers.get("content-type");
+                    if (contentType && contentType.includes("video")) {
+                        const blob = await response.blob();
+                        
+                        // Check if cancelled before setting video
+                        if (isCancelledRef.current) {
+                            return;
+                        }
+                        
+                        const url = URL.createObjectURL(blob);
+                        setVideoUrl(url);
+                        setIsGeneratingVideo(false);
+                        return; // Success!
+                    }
+                }
+
+                // If server-side fails, check error and decide on fallback
+                const errorData = await response.json().catch(() => null);
+                const errorMessage = errorData?.error || "Server-side generation failed";
+                
+                // Only fall back to GIF if it's a configuration issue (no API key)
+                // Otherwise show the error
+                if (errorMessage.includes("NANO_BANANA_API_KEY") || errorMessage.includes("not configured")) {
+                    throw new Error(errorMessage + ". Please add NANO_BANANA_API_KEY to your .env.local file.");
+                } else {
+                    // For other API errors, try GIF fallback as backup
+                    console.log("Nano Banana API error, trying GIF fallback:", errorMessage);
+                    // Fall through to client-side generation
+                }
+            } catch (serverError: any) {
+                // Check if it was a cancellation
+                if (serverError.name === 'AbortError' || isCancelledRef.current) {
+                    console.log("Video generation cancelled");
+                    return;
+                }
+                
+                // If it's a configuration error, don't fall back to GIF
+                if (serverError.message?.includes("NANO_BANANA_API_KEY") || 
+                    serverError.message?.includes("not configured")) {
+                    throw serverError;
+                }
+                
+                // For other errors, try GIF fallback
+                console.log("Server error, trying GIF fallback:", serverError.message);
+                // Fall through to client-side generation
+            }
+
+            // Check if cancelled before starting GIF generation
+            if (isCancelledRef.current) {
+                return;
+            }
+
+            // Client-side GIF generation fallback
+            const GIF = (await import("gif.js")).default;
+            const gif = new GIF({
+                workers: 2,
+                quality: 10,
+                width: canvasRef.current.width,
+                height: canvasRef.current.height,
+            });
+            
+            gifInstanceRef.current = gif;
+
+            // Generate GIF asynchronously
+            const gifPromise = new Promise<Blob>((resolve, reject) => {
+                // Check for cancellation periodically
+                const checkCancellation = () => {
+                    if (isCancelledRef.current) {
+                        reject(new Error("Cancelled"));
+                    }
+                };
+
+                gif.on("finished", (blob: Blob) => {
+                    checkCancellation();
+                    if (!isCancelledRef.current) {
+                        resolve(blob);
+                    }
+                });
+                gif.on("progress", (p: number) => {
+                    checkCancellation();
+                });
+
+                // Load all frames as images and add to GIF
+                let loadedCount = 0;
+                const totalFrames = allFrames.length;
+
+                if (totalFrames === 0) {
+                    reject(new Error("No frames to generate GIF"));
+                    return;
+                }
+
+                allFrames.forEach((frame) => {
+                    // Check cancellation before processing each frame
+                    if (isCancelledRef.current) {
+                        return;
+                    }
+                    
+                    const img = new Image();
+                    img.onload = () => {
+                        if (isCancelledRef.current) return;
+                        
+                        gif.addFrame(img, { delay: 500 }); // 500ms delay between frames
+                        loadedCount++;
+                        if (loadedCount === totalFrames && !isCancelledRef.current) {
+                            gif.render();
+                        }
+                    };
+                    img.onerror = () => {
+                        loadedCount++;
+                        if (loadedCount === totalFrames && !isCancelledRef.current) {
+                            // Try to render even if some frames failed
+                            try {
+                                gif.render();
+                            } catch (e) {
+                                if (!isCancelledRef.current) {
+                                    reject(new Error("Failed to generate GIF"));
+                                }
+                            }
+                        }
+                    };
+                    img.src = frame.imageData;
+                });
+            });
+
+            const blob = await gifPromise;
+            
+            // Final cancellation check
+            if (isCancelledRef.current) {
+                return;
+            }
+            
             const url = URL.createObjectURL(blob);
             setVideoUrl(url);
-        } catch (error) {
-            console.error("Error generating video:", error);
-            alert("Failed to generate video. Please try again.");
-        } finally {
             setIsGeneratingVideo(false);
+        } catch (error: any) {
+            // Don't show error if it was cancelled
+            if (error.name === 'AbortError' || error.message === "Cancelled" || isCancelledRef.current) {
+                console.log("Video generation cancelled by user");
+                return;
+            }
+            
+            console.error("Error generating video:", error);
+            const errorMessage = error instanceof Error ? error.message : "Failed to generate video. Please try again.";
+            alert(errorMessage);
+            setIsGeneratingVideo(false);
+        } finally {
+            // Cleanup
+            abortControllerRef.current = null;
+            gifInstanceRef.current = null;
         }
     };
+
+    // Cleanup video generation on unmount
+    useEffect(() => {
+        return () => {
+            if (isGeneratingVideo) {
+                cancelVideoGeneration();
+            }
+        };
+    }, [isGeneratingVideo, cancelVideoGeneration]);
 
     return (
         <div className="relative w-full h-full bg-white dark:bg-zinc-950 rounded-xl overflow-hidden shadow-sm border border-border">
@@ -336,23 +526,35 @@ export function Whiteboard() {
 
                 <div className="w-px h-6 bg-zinc-200 dark:bg-zinc-800 mx-1" />
 
-                <button
-                    onClick={generateVideo}
-                    disabled={isGeneratingVideo || frames.length === 0}
-                    className={cn(
-                        "p-2 rounded-full transition-colors flex items-center gap-2",
-                        isGeneratingVideo || frames.length === 0
-                            ? "opacity-50 cursor-not-allowed"
-                            : "hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-600 dark:text-blue-400"
-                    )}
-                    title="Nano Banana - Create animated video"
-                >
-                    {isGeneratingVideo ? (
-                        <Loader2 className="w-5 h-5 animate-spin" />
-                    ) : (
+                {isGeneratingVideo ? (
+                    <>
+                        <button
+                            onClick={cancelVideoGeneration}
+                            className="p-2 rounded-full transition-colors hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400"
+                            title="Cancel video generation"
+                        >
+                            <X className="w-5 h-5" />
+                        </button>
+                        <div className="flex items-center gap-1 px-2 text-xs text-zinc-600 dark:text-zinc-400">
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Generating...</span>
+                        </div>
+                    </>
+                ) : (
+                    <button
+                        onClick={generateVideo}
+                        disabled={frames.length === 0}
+                        className={cn(
+                            "p-2 rounded-full transition-colors flex items-center gap-2",
+                            frames.length === 0
+                                ? "opacity-50 cursor-not-allowed"
+                                : "hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-600 dark:text-blue-400"
+                        )}
+                        title="Nano Banana - Create animated video"
+                    >
                         <Video className="w-5 h-5" />
-                    )}
-                </button>
+                    </button>
+                )}
 
                 <div className="w-px h-6 bg-zinc-200 dark:bg-zinc-800 mx-1" />
 
