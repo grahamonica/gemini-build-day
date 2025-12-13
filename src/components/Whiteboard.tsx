@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useRef, useState, useEffect, useCallback } from "react";
-import { Eraser, Pencil, Send, Trash2, Undo } from "lucide-react";
+import { Eraser, Pencil, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Conversation, Message } from "./Conversation";
 
 interface Point {
     x: number;
@@ -12,9 +13,13 @@ interface Point {
 export function Whiteboard() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [isDrawing, setIsDrawing] = useState(false);
-    const [color, setColor] = useState("#000000"); // Default black
+    const [color, setColor] = useState("#000000");
     const [brushSize, setBrushSize] = useState(3);
-    const [isSolving, setIsSolving] = useState(false);
+    const [messages, setMessages] = useState<Message[]>([]);
+
+    // Timing refs
+    const dragStartTime = useRef<number>(0);
+    const idleTimer = useRef<NodeJS.Timeout | null>(null);
     const lastPoint = useRef<Point | null>(null);
 
     // Initialize canvas size
@@ -28,16 +33,16 @@ export function Whiteboard() {
                 canvas.width = parent.clientWidth;
                 canvas.height = parent.clientHeight;
 
-                // Restore context settings after resize if needed, 
-                // usually resize clears canvas so we might want to save/restore image data
-                // For MVP we accept resize clears or we implement better resize logic.
-                // Let's just set context defaults again.
                 const ctx = canvas.getContext("2d");
                 if (ctx) {
                     ctx.lineCap = "round";
                     ctx.lineJoin = "round";
                     ctx.strokeStyle = color;
                     ctx.lineWidth = brushSize;
+
+                    // Fill with white background
+                    ctx.fillStyle = "#ffffff";
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
                 }
             }
         };
@@ -47,14 +52,12 @@ export function Whiteboard() {
         return () => window.removeEventListener("resize", resize);
     }, [color, brushSize]);
 
-    // Prevent scrolling when touching the canvas
+    // Prevent scrolling
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
 
-        const preventDefault = (e: TouchEvent) => {
-            e.preventDefault();
-        };
+        const preventDefault = (e: TouchEvent) => e.preventDefault();
 
         canvas.addEventListener('touchstart', preventDefault, { passive: false });
         canvas.addEventListener('touchmove', preventDefault, { passive: false });
@@ -67,7 +70,7 @@ export function Whiteboard() {
         };
     }, []);
 
-    // Update context when state changes
+    // Update context
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
@@ -78,23 +81,64 @@ export function Whiteboard() {
         }
     }, [color, brushSize]);
 
-    const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
-        // Prevent scrolling on touch devices
-        if ('touches' in e) {
-            // e.preventDefault(); // React synthetic events might complain, but harmless if passive: false
+    const captureAndSend = async () => {
+        if (!canvasRef.current) return;
+
+        const imageData = canvasRef.current.toDataURL("image/png");
+        const newMessageId = Date.now().toString();
+
+        // Optimistically add user message
+        const userMsg: Message = { role: 'user', content: imageData, id: newMessageId };
+        setMessages(prev => [...prev, userMsg]);
+
+        try {
+            // We need to send history. For now, let's just send the current image + history text?
+            // Or better, send the whole history including previous images if we want true multi-modal context.
+            // For MVP efficiency, maybe we just send the new image and text history?
+            // Check API route plan: "Expect messages array".
+
+            const response = await fetch("/api/solve", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    image: imageData,
+                    history: messages // Send previous context
+                }),
+            });
+
+            if (!response.ok) throw new Error("Failed to get response");
+
+            const data = await response.json();
+
+            const aiMsg: Message = {
+                role: 'model',
+                content: data.text,
+                id: (Date.now() + 1).toString()
+            };
+            setMessages(prev => [...prev, aiMsg]);
+
+        } catch (error) {
+            console.error(error);
+            // Optionally remove the optimistically added message or show error
         }
+    };
+
+    const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
+        // Clear any pending idle timer because user is interacting again
+        if (idleTimer.current) {
+            clearTimeout(idleTimer.current);
+            idleTimer.current = null;
+        }
+
         setIsDrawing(true);
+        dragStartTime.current = Date.now();
+
         const { x, y } = getCoordinates(e);
         lastPoint.current = { x, y };
     };
 
     const draw = (e: React.MouseEvent | React.TouchEvent) => {
         if (!isDrawing || !canvasRef.current || !lastPoint.current) return;
-
-        // Prevent scrolling on touch devices while drawing
-        // Note: In React, touch events are passive by default in some versions, 
-        // so e.preventDefault() might not work unless we attach non-passive listener manually.
-        // However, for style touch-action: none is the modern way.
 
         const ctx = canvasRef.current.getContext("2d");
         if (!ctx) return;
@@ -110,8 +154,19 @@ export function Whiteboard() {
     };
 
     const stopDrawing = () => {
+        if (!isDrawing) return;
         setIsDrawing(false);
         lastPoint.current = null;
+
+        const dragDuration = Date.now() - dragStartTime.current;
+
+        // Logic: specific time threshold for "work unit"
+        if (dragDuration > 500) {
+            // Schedule capture
+            idleTimer.current = setTimeout(() => {
+                captureAndSend();
+            }, 1000); // 1s pause
+        }
     };
 
     const getCoordinates = (e: React.MouseEvent | React.TouchEvent): Point => {
@@ -137,65 +192,17 @@ export function Whiteboard() {
         if (!canvas) return;
         const ctx = canvas.getContext("2d");
         if (ctx) {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
+        setMessages([]); // Clear conversation on canvas clear? Maybe optional.
     };
-
-    const solveEquation = async () => {
-        if (!canvasRef.current) return;
-        setIsSolving(true);
-
-        try {
-            const imageData = canvasRef.current.toDataURL("image/png");
-
-            const response = await fetch("/api/solve", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ image: imageData }),
-            });
-
-            if (!response.ok) throw new Error("Failed to solve");
-
-            const data = await response.json();
-            // data.solution would be the text
-            // data.image (optional) if we render it server side, 
-            // or we can render text to canvas here.
-
-            console.log("Solution:", data.text);
-
-            // Render text on canvas for now as a simple placeholder for the next step
-            // The implementation plan says "Render Solution to Image", which implies 
-            // we might want to do that in the API or here.
-            // Let's assume the API returns text and we render it.
-            renderTextToCanvas(data.text);
-
-        } catch (error) {
-            console.error(error);
-            alert("Failed to solve equation. Check API Key.");
-        } finally {
-            setIsSolving(false);
-        }
-    };
-
-    const renderTextToCanvas = (text: string) => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-
-        // Simple text rendering for MVP
-        ctx.save();
-        ctx.font = "24px sans-serif";
-        ctx.fillStyle = "#ef4444"; // Red color for solution
-        // Position logic is tricky, let's just put it at bottom left or near center?
-        // Better: find empty space? Hard.
-        // Let's put it at fixed position for MVP (top left or bottom center)
-        ctx.fillText(text, 50, canvas.height - 50);
-        ctx.restore();
-    }
 
     return (
         <div className="relative w-full h-full bg-white dark:bg-zinc-950 rounded-xl overflow-hidden shadow-sm border border-border">
+            {/* Conversation Overlay */}
+            <Conversation messages={messages} />
+
             {/* Canvas */}
             <canvas
                 ref={canvasRef}
@@ -210,7 +217,7 @@ export function Whiteboard() {
             />
 
             {/* Toolbar */}
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-2 p-2 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-sm rounded-full shadow-lg border border-border">
+            <div className="absolute top-4 left-4 flex items-center gap-2 p-2 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-sm rounded-full shadow-lg border border-border z-20">
                 <button
                     onClick={() => setColor("#000000")}
                     className={cn("p-2 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors", color === "#000000" && "bg-zinc-100 dark:bg-zinc-800")}
@@ -218,20 +225,14 @@ export function Whiteboard() {
                     <Pencil className="w-5 h-5 text-black dark:text-white" />
                 </button>
                 <button
-                    onClick={() => setColor("#ef4444")} // Red pen
+                    onClick={() => setColor("#ef4444")}
                     className={cn("p-2 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors", color === "#ef4444" && "bg-zinc-100 dark:bg-zinc-800")}
                 >
                     <div className="w-5 h-5 rounded-full bg-red-500 border border-zinc-200" />
                 </button>
-                {/* Eraser just paints white/background? Or composite operation? */}
                 <button
-                    onClick={() => {
-                        // Simple eraser: paint with background color
-                        setColor("#ffffff");
-                        // But wait, in dark mode bg is different.
-                        // We need a real eraser mode which uses globalCompositeOperation = 'destination-out'
-                    }}
-                    className={cn("p-2 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors")}
+                    onClick={() => setColor("#ffffff")}
+                    className={cn("p-2 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors", color === "#ffffff" && "bg-zinc-100 dark:bg-zinc-800")}
                 >
                     <Eraser className="w-5 h-5" />
                 </button>
@@ -243,24 +244,6 @@ export function Whiteboard() {
                     className="p-2 rounded-full hover:bg-red-50 text-red-500 transition-colors"
                 >
                     <Trash2 className="w-5 h-5" />
-                </button>
-            </div>
-
-            {/* Action Button */}
-            <div className="absolute bottom-6 right-6">
-                <button
-                    onClick={solveEquation}
-                    disabled={isSolving}
-                    className="flex items-center gap-2 px-6 py-3 bg-black dark:bg-white text-white dark:text-black rounded-full font-medium shadow-lg hover:shadow-xl hover:scale-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                    {isSolving ? (
-                        <span className="animate-pulse">Solving...</span>
-                    ) : (
-                        <>
-                            <span>Solve</span>
-                            <Send className="w-4 h-4 ml-1" />
-                        </>
-                    )}
                 </button>
             </div>
         </div>
