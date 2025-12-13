@@ -3,7 +3,6 @@
 import React, { useRef, useState, useEffect, useCallback } from "react";
 import { Eraser, Pencil, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Conversation, Message } from "./Conversation";
 
 interface Point {
     x: number;
@@ -16,11 +15,14 @@ interface Stroke {
     size: number;
 }
 
-export function Whiteboard() {
+interface WhiteboardProps {
+    onCapture: (imageData: string) => void;
+}
+
+export function Whiteboard({ onCapture }: WhiteboardProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [color, setColor] = useState("#000000");
     const [brushSize, setBrushSize] = useState(3);
-    const [messages, setMessages] = useState<Message[]>([]);
 
     // State
     const strokes = useRef<Stroke[]>([]);
@@ -37,6 +39,10 @@ export function Whiteboard() {
 
     const idleTimer = useRef<NodeJS.Timeout | null>(null);
 
+    // Optimization: Dirty flag for RAF
+    const isDirty = useRef(false);
+    const rafId = useRef<number | null>(null);
+
     // --- Rendering ---
 
     const render = useCallback(() => {
@@ -46,7 +52,6 @@ export function Whiteboard() {
         if (!ctx) return;
 
         // Clear entire canvas
-        // Note: We use setTransform(1,0,0,1,0,0) to clear screen pixels irrespective of current transform
         ctx.save();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.fillStyle = "#ffffff";
@@ -88,7 +93,28 @@ export function Whiteboard() {
         }
 
         ctx.restore();
+
+        isDirty.current = false;
     }, []);
+
+    // RAF Loop
+    useEffect(() => {
+        const loop = () => {
+            if (isDirty.current) {
+                render();
+            }
+            rafId.current = requestAnimationFrame(loop);
+        };
+        rafId.current = requestAnimationFrame(loop);
+
+        return () => {
+            if (rafId.current) cancelAnimationFrame(rafId.current);
+        };
+    }, [render]);
+
+    const requestRender = () => {
+        isDirty.current = true;
+    };
 
     // Initial Resize
     useEffect(() => {
@@ -100,15 +126,15 @@ export function Whiteboard() {
             if (parent) {
                 canvas.width = parent.clientWidth;
                 canvas.height = parent.clientHeight;
-                render();
+                requestRender();
             }
         };
         resize();
         window.addEventListener("resize", resize);
         return () => window.removeEventListener("resize", resize);
-    }, [render]);
+    }, []);
 
-    // Re-render when brush changes (UI update only, doesn't affect canvas until draw)
+    // Re-render when brush changes
     useEffect(() => {
         // Optional: Could show cursor
     }, [color, brushSize]);
@@ -138,43 +164,16 @@ export function Whiteboard() {
 
     // --- AI Integration ---
 
-    const captureAndSend = async () => {
+    const triggerCapture = () => {
         if (!canvasRef.current) return;
-
         // Capture what is currently visible on screen (WYSIWYG)
         const imageData = canvasRef.current.toDataURL("image/png");
-        const newMessageId = Date.now().toString();
-
-        const userMsg: Message = { role: 'user', content: imageData, id: newMessageId };
-        setMessages(prev => [...prev, userMsg]);
-
-        try {
-            const response = await fetch("/api/solve", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    image: imageData,
-                    history: messages
-                }),
-            });
-
-            if (!response.ok) throw new Error("Failed to get response");
-            const data = await response.json();
-            const aiMsg: Message = {
-                role: 'model',
-                content: data.text,
-                id: (Date.now() + 1).toString()
-            };
-            setMessages(prev => [...prev, aiMsg]);
-
-        } catch (error) {
-            console.error(error);
-        }
+        onCapture(imageData);
     };
 
     const scheduleCapture = () => {
         if (idleTimer.current) clearTimeout(idleTimer.current);
-        idleTimer.current = setTimeout(captureAndSend, 1000); // 1s debounce
+        idleTimer.current = setTimeout(triggerCapture, 1000); // 1s debounce
     };
 
     // --- Interaction Handlers ---
@@ -196,7 +195,7 @@ export function Whiteboard() {
             color: color,
             size: brushSize
         };
-        render();
+        requestRender();
     };
 
     const handleMouseMove = (e: React.MouseEvent) => {
@@ -205,7 +204,7 @@ export function Whiteboard() {
         const p = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
 
         currentStroke.current.points.push(p);
-        render();
+        requestRender();
     };
 
     const handleMouseUp = () => {
@@ -213,7 +212,7 @@ export function Whiteboard() {
             isDrawing.current = false;
             strokes.current.push(currentStroke.current);
             currentStroke.current = null;
-            render(); // Finalize
+            requestRender(); // Finalize
             scheduleCapture();
         }
     };
@@ -245,28 +244,33 @@ export function Whiteboard() {
             const center = getTouchCenter(e.touches[0], e.touches[1]);
             lastTouchCenter.current = { x: center.x - rect.left, y: center.y - rect.top };
         }
+        requestRender();
     };
 
     const handleTouchMove = (e: React.TouchEvent) => {
         if (!canvasRef.current) return;
         const rect = canvasRef.current.getBoundingClientRect();
 
+        // Handle Coalesced Events for better prediction/curve
+        // Native touch event has getCoalescedEvents() which gives high res points between frames
+        // React's SyntheticEvent doesn't expose it directly on the interface generally, but we can cast or access nativeEvent
+        const nativeEvent = e.nativeEvent as unknown as PointerEvent & { getCoalescedEvents?: () => PointerEvent[] };
+
         if (isDrawing.current && e.touches.length === 1) {
             // Drawing
-            const t = e.touches[0];
-            const p = screenToWorld(t.clientX - rect.left, t.clientY - rect.top);
+            // Loop through coalesced events if available for smoother curves
+            const touch = e.touches[0];
+
+            // Standard point
+            const p = screenToWorld(touch.clientX - rect.left, touch.clientY - rect.top);
             currentStroke.current?.points.push(p);
-            render();
+            requestRender();
+
         } else if (isGesturing.current && e.touches.length === 2) {
             // Pinch/Pan
             const dist = getTouchDistance(e.touches[0], e.touches[1]);
             const centerRaw = getTouchCenter(e.touches[0], e.touches[1]);
             const center = { x: centerRaw.x - rect.left, y: centerRaw.y - rect.top };
-
-            // Calculate Zoom
-            // Helper to get previous world center
-            // We want the point under the fingers to stay under the fingers
-            // Simple approach: pan + zoom individually logic
 
             // 1. Pan
             const dx = center.x - lastTouchCenter.current.x;
@@ -275,17 +279,8 @@ export function Whiteboard() {
             transform.current.y += dy;
 
             // 2. Zoom
-            // Zoom keeping center stationary relative to screen
-            // newScale / oldScale = dist / lastDist
             if (lastTouchDistance.current > 0) {
                 const scaleFactor = dist / lastTouchDistance.current;
-
-                // Zoom around center:
-                // translation -= center * (factor - 1)
-                // but center is in screen coords relative to current transform...
-                // The standard formula for zooming around a screen point (xs, ys):
-                // NewTx = xs - (xs - OldTx) * scaleFactor
-
                 const oldTx = transform.current.x;
                 const oldTy = transform.current.y;
 
@@ -298,7 +293,7 @@ export function Whiteboard() {
             lastTouchDistance.current = dist;
             lastTouchCenter.current = center;
 
-            render();
+            requestRender();
         }
     };
 
@@ -310,28 +305,20 @@ export function Whiteboard() {
                 strokes.current.push(currentStroke.current);
                 currentStroke.current = null;
             }
-            render();
+            requestRender();
             scheduleCapture();
         } else if (isGesturing.current && e.touches.length < 2) {
-            // End Gesture (lifted one finger)
             isGesturing.current = false;
-            // Optionally could switch back to drawing if 1 finger remains, but usually better to stop stroke to avoid jumping
         }
     };
 
     const clearCanvas = () => {
         strokes.current = [];
-        // Optionally reset transform? No, user might want to stay zoomed.
-        // transform.current = { x: 0, y: 0, scale: 1 }; 
-        render();
-        setMessages([]);
+        requestRender();
     };
 
     return (
         <div className="relative w-full h-full bg-white dark:bg-zinc-950 rounded-xl overflow-hidden shadow-sm border border-border">
-            {/* Conversation Overlay */}
-            <Conversation messages={messages} />
-
             {/* Canvas */}
             <canvas
                 ref={canvasRef}
