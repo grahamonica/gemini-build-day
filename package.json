@@ -9,11 +9,12 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
-    "clsx": "^2.1.1",
-    "lucide-react": "^0.561.0",
-    "next": "16.0.10",
-    "pdfjs-dist": "^5.4.449",
+  "@google/generative-ai": "^0.24.1",
+  "clsx": "^2.1.1",
+  "katex": "^0.16.11",
+  "lucide-react": "^0.561.0",
+  "next": "16.0.10",
+  "pdfjs-dist": "^5.4.449",
     "react": "19.2.1",
     "react-dom": "19.2.1",
     "tailwind-merge": "^3.4.0"

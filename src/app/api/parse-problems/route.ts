@@ -31,12 +31,13 @@ export async function POST(req: NextRequest) {
             model: "gemini-2.5-flash",
             generationConfig: {
                 responseMimeType: "application/json",
+                maxOutputTokens: 8192,
             },
         });
 
         const prompt = `
 You will receive a single page image of homework or worksheets that may contain multiple individual problems.
-Extract each distinct problem, preserving the order they appear from top to bottom.
+Extract EVERY distinct problem on the page, preserving the order they appear from top to bottom. Do not stop early or truncate the list.
 For every problem, return a concise title, the full text of the problem, and an array of LaTeX strings for any equations or expressions found inside that problem.
 Also include an optional normalized bounding box {x,y,width,height} in the 0-1 range that tightly encloses the problem content so we can crop the screenshot.
 

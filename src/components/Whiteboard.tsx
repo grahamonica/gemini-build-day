@@ -2,6 +2,8 @@
 
 import React, { useRef, useState, useEffect, useCallback } from "react";
 import { Eraser, Link2, Loader2, Pencil, Send, Trash2, UploadCloud } from "lucide-react";
+import katex from "katex";
+import "katex/dist/katex.min.css";
 import { cn } from "@/lib/utils";
 import { BoundingBox, Problem } from "@/lib/problem";
 
@@ -28,11 +30,6 @@ export function Whiteboard() {
     const [problems, setProblems] = useState<Problem[]>([]);
     const [activeProblemId, setActiveProblemId] = useState<string | null>(null);
     const lastPoint = useRef<Point | null>(null);
-
-    const selectedProblem =
-        (activeProblemId && problems.find((problem) => problem.id === activeProblemId)) ||
-        problems[0] ||
-        null;
 
     useEffect(() => {
         if (problems.length && !activeProblemId) {
@@ -237,6 +234,15 @@ export function Whiteboard() {
         });
     }, []);
 
+    const renderLatexHtml = (expr: string) => {
+        try {
+            return { __html: katex.renderToString(expr, { throwOnError: false, strict: "ignore" }) };
+        } catch (err) {
+            console.error("Failed to render LaTeX", err);
+            return { __html: expr };
+        }
+    };
+
     const convertPdfToImages = useCallback(async (file: File): Promise<string[]> => {
         // @ts-expect-error - legacy build does not ship types but is required in browsers
         const pdfjs = await import("pdfjs-dist/legacy/build/pdf");
@@ -416,115 +422,9 @@ export function Whiteboard() {
         handleFiles(event.dataTransfer.files);
     };
 
-    const wrapText = (
-        ctx: CanvasRenderingContext2D,
-        text: string,
-        x: number,
-        y: number,
-        maxWidth: number,
-        lineHeight: number
-    ) => {
-        const words = text.split(" ");
-        let line = "";
-        let cursorY = y;
-
-        for (let n = 0; n < words.length; n++) {
-            const testLine = line + words[n] + " ";
-            const metrics = ctx.measureText(testLine);
-            const testWidth = metrics.width;
-            if (testWidth > maxWidth && n > 0) {
-                ctx.fillText(line, x, cursorY);
-                line = words[n] + " ";
-                cursorY += lineHeight;
-            } else {
-                line = testLine;
-            }
-        }
-        ctx.fillText(line, x, cursorY);
-        return cursorY + lineHeight;
-    };
-
-    const renderProblemToCanvas = useCallback(
-        (problem: Problem | null) => {
-            const canvas = canvasRef.current;
-            if (!canvas) return;
-            const ctx = canvas.getContext("2d");
-            if (!ctx) return;
-
-            const drawProblem = (imageSrc?: string) => {
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                paintCanvasBackground();
-
-                let yOffset = 24;
-                const margin = 20;
-                const maxWidth = canvas.width - margin * 2;
-
-                if (imageSrc) {
-                    const img = new Image();
-                    img.onload = () => {
-                        const scale = Math.min(
-                            maxWidth / img.width,
-                            (canvas.height * 0.35) / img.height,
-                            1
-                        );
-                        const w = img.width * scale;
-                        const h = img.height * scale;
-                        const x = (canvas.width - w) / 2;
-                        ctx.drawImage(img, x, margin, w, h);
-                        yOffset = margin + h + 20;
-
-                        ctx.fillStyle = "#0f172a";
-                        ctx.font = "18px sans-serif";
-                        ctx.textBaseline = "top";
-                        yOffset = wrapText(ctx, problem?.text || "No text detected.", margin, yOffset, maxWidth, 22);
-
-                        if (problem?.latex && problem.latex.length) {
-                            yOffset += 8;
-                            ctx.fillStyle = "#111827";
-                            ctx.font = "16px monospace";
-                            problem.latex.forEach((eq) => {
-                                yOffset = wrapText(ctx, `LaTeX: ${eq}`, margin, yOffset, maxWidth, 20);
-                            });
-                        }
-
-                        ctx.strokeStyle = color;
-                        ctx.lineWidth = brushSize;
-                    };
-                    img.src = imageSrc;
-                } else {
-                    ctx.fillStyle = "#0f172a";
-                    ctx.font = "18px sans-serif";
-                    ctx.textBaseline = "top";
-                    yOffset = wrapText(ctx, problem?.text || "No text detected.", margin, yOffset, maxWidth, 22);
-
-                    if (problem?.latex && problem.latex.length) {
-                        yOffset += 8;
-                        ctx.fillStyle = "#111827";
-                        ctx.font = "16px monospace";
-                        problem.latex.forEach((eq) => {
-                            yOffset = wrapText(ctx, `LaTeX: ${eq}`, margin, yOffset, maxWidth, 20);
-                        });
-                    }
-
-                    ctx.strokeStyle = color;
-                    ctx.lineWidth = brushSize;
-                }
-            };
-
-            if (!problem) {
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                paintCanvasBackground();
-                return;
-            }
-
-            drawProblem(problem.croppedImage || problem.sourceImage);
-        },
-        [brushSize, color, paintCanvasBackground]
-    );
-
     useEffect(() => {
-        renderProblemToCanvas(selectedProblem || null);
-    }, [selectedProblem, renderProblemToCanvas]);
+        paintCanvasBackground();
+    }, [paintCanvasBackground]);
 
     return (
         <div className="flex h-full w-full flex-col gap-4">
@@ -574,46 +474,43 @@ export function Whiteboard() {
                     {uploadError && <p className="text-sm text-red-500">{uploadError}</p>}
                 </div>
 
-                <div className="mt-4 rounded-lg border border-border bg-zinc-50 p-3 dark:bg-zinc-900">
-                    <div className="flex items-center justify-between text-sm font-semibold">
-                        <span>Problems</span>
-                        <span className="text-muted-foreground">{problems.length || 0}</span>
-                    </div>
-                    <div className="mt-2 space-y-2 max-h-48 overflow-auto">
-                        {problems.length === 0 && (
-                            <p className="text-sm text-muted-foreground">
-                                Upload a PDF or image and we will split it into problems for you.
-                            </p>
-                        )}
-                        {problems.length > 0 &&
-                            problems.map((problem, index) => (
-                                <label
-                                    key={problem.id}
-                                    className={cn(
-                                        "flex cursor-pointer items-center gap-2 rounded-md border border-transparent px-2 py-2 text-sm transition",
-                                        activeProblemId === problem.id && "border-black/30 bg-white shadow-sm dark:border-white/40"
-                                    )}
-                                >
-                                    <input
-                                        type="checkbox"
-                                        className="h-4 w-4 cursor-pointer accent-black dark:accent-white"
-                                        checked={activeProblemId === problem.id}
-                                        onChange={() => setActiveProblemId(problem.id)}
-                                    />
-                                    <span className="truncate">
-                                        {problems.length === 1 ? "Problem" : `Problem ${index + 1}`} - {problem.title}
-                                    </span>
-                                </label>
-                            ))}
-                    </div>
-                </div>
             </div>
 
             <div className="relative flex min-h-[360px] flex-1 flex-col overflow-hidden rounded-xl border border-border bg-white shadow-sm dark:bg-zinc-950">
-                <div className="flex items-center justify-between gap-3 border-b border-border bg-zinc-50 px-4 py-2 text-sm font-medium dark:bg-zinc-900">
-                    <span>Problem is rendered inside the canvas — draw your solution on top.</span>
-                    <div className="flex items-center gap-2">
-                        <label className="flex items-center gap-2 rounded-lg bg-white px-3 py-1.5 text-xs font-medium shadow-sm ring-1 ring-border dark:bg-zinc-950">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-zinc-50 px-4 py-3 text-sm font-medium dark:bg-zinc-900">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs uppercase tracking-wide text-muted-foreground">Menu</span>
+                        <button
+                            onClick={() => setColor("#000000")}
+                            className={cn(
+                                "flex items-center gap-1 rounded-md border border-border px-3 py-2 text-xs transition hover:bg-zinc-100 dark:hover:bg-zinc-800",
+                                color === "#000000" && "bg-zinc-100 dark:bg-zinc-800"
+                            )}
+                            aria-label="Black pen"
+                        >
+                            <Pencil className="h-4 w-4" />
+                            <span>Pen</span>
+                        </button>
+                        <button
+                            onClick={() => setColor("#ef4444")}
+                            className={cn(
+                                "flex items-center gap-1 rounded-md border border-border px-3 py-2 text-xs transition hover:bg-zinc-100 dark:hover:bg-zinc-800",
+                                color === "#ef4444" && "bg-zinc-100 dark:bg-zinc-800"
+                            )}
+                            aria-label="Red pen"
+                        >
+                            <div className="h-3 w-3 rounded-full bg-red-500" />
+                            <span>Red</span>
+                        </button>
+                        <button
+                            onClick={() => setColor("#ffffff")}
+                            className="flex items-center gap-1 rounded-md border border-border px-3 py-2 text-xs transition hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                            aria-label="Eraser"
+                        >
+                            <Eraser className="h-4 w-4" />
+                            <span>Eraser</span>
+                        </button>
+                        <label className="flex items-center gap-2 rounded-md border border-border bg-white px-3 py-2 text-xs font-medium shadow-sm transition dark:bg-zinc-950">
                             <span>Brush</span>
                             <input
                                 type="range"
@@ -624,66 +521,20 @@ export function Whiteboard() {
                                 className="h-2 cursor-pointer"
                             />
                         </label>
-                    </div>
-                </div>
-                <div className="relative flex-1">
-                    <canvas
-                        ref={canvasRef}
-                        className="h-full w-full touch-none cursor-crosshair bg-transparent"
-                        onMouseDown={startDrawing}
-                        onMouseMove={draw}
-                        onMouseUp={stopDrawing}
-                        onMouseLeave={stopDrawing}
-                        onTouchStart={startDrawing}
-                        onTouchMove={draw}
-                        onTouchEnd={stopDrawing}
-                    />
-
-                    <div className="absolute left-1/2 top-4 flex -translate-x-1/2 items-center gap-2 rounded-full border border-border bg-white/90 px-2 py-1 shadow-lg backdrop-blur-sm dark:bg-zinc-900/90">
-                        <button
-                            onClick={() => setColor("#000000")}
-                            className={cn(
-                                "p-2 rounded-full transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800",
-                                color === "#000000" && "bg-zinc-100 dark:bg-zinc-800"
-                            )}
-                            aria-label="Black pen"
-                        >
-                            <Pencil className="h-5 w-5 text-black dark:text-white" />
-                        </button>
-                        <button
-                            onClick={() => setColor("#ef4444")}
-                            className={cn(
-                                "p-2 rounded-full transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800",
-                                color === "#ef4444" && "bg-zinc-100 dark:bg-zinc-800"
-                            )}
-                            aria-label="Red pen"
-                        >
-                            <div className="h-5 w-5 rounded-full border border-zinc-200 bg-red-500" />
-                        </button>
-                        <button
-                            onClick={() => setColor("#ffffff")}
-                            className="p-2 rounded-full transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                            aria-label="Eraser"
-                        >
-                            <Eraser className="h-5 w-5" />
-                        </button>
-
-                        <div className="mx-1 h-6 w-px bg-zinc-200 dark:bg-zinc-800" />
-
                         <button
                             onClick={clearCanvas}
-                            className="p-2 text-red-500 transition-colors hover:bg-red-50 rounded-full"
+                            className="flex items-center gap-1 rounded-md border border-border px-3 py-2 text-xs text-red-600 transition hover:bg-red-50 dark:text-red-400"
                             aria-label="Clear canvas"
                         >
-                            <Trash2 className="h-5 w-5" />
+                            <Trash2 className="h-4 w-4" />
+                            <span>Clear</span>
                         </button>
                     </div>
-
-                    <div className="absolute bottom-5 right-5">
+                    <div className="flex items-center gap-2">
                         <button
                             onClick={solveEquation}
                             disabled={isSolving}
-                            className="flex items-center gap-2 rounded-full bg-black px-6 py-3 font-medium text-white shadow-lg transition-all hover:scale-105 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-black"
+                            className="flex items-center gap-2 rounded-md bg-black px-4 py-2 text-xs font-semibold text-white shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-black"
                         >
                             {isSolving ? (
                                 <>
@@ -698,6 +549,96 @@ export function Whiteboard() {
                             )}
                         </button>
                     </div>
+                </div>
+
+                <div className="border-b border-border bg-white/90 px-4 py-3 dark:bg-zinc-900/80">
+                    <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        <span>Problems</span>
+                        <span>{problems.length}</span>
+                    </div>
+                    <div className="mt-2 max-h-56 space-y-3 overflow-y-auto pr-1">
+                        {problems.length === 0 && (
+                            <p className="text-sm text-muted-foreground">
+                                Upload a PDF or image and we will split it into problems for you.
+                            </p>
+                        )}
+                        {problems.map((problem, index) => {
+                            const showImage =
+                                !problem.text?.trim() &&
+                                (!problem.latex || problem.latex.length === 0) &&
+                                problem.croppedImage;
+                            return (
+                                <button
+                                    key={problem.id}
+                                    onClick={() => setActiveProblemId(problem.id)}
+                                    className={cn(
+                                        "w-full rounded-md border border-border bg-white p-3 text-left shadow-sm transition hover:border-black/50 dark:bg-zinc-950",
+                                        activeProblemId === problem.id && "ring-1 ring-black dark:ring-white"
+                                    )}
+                                >
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center gap-2">
+                                            <input
+                                                type="radio"
+                                                checked={activeProblemId === problem.id}
+                                                onChange={() => setActiveProblemId(problem.id)}
+                                                className="h-4 w-4 cursor-pointer accent-black dark:accent-white"
+                                            />
+                                            <span className="text-sm font-semibold">
+                                                Problem {index + 1}: {problem.title}
+                                            </span>
+                                        </div>
+                                        {problem.latex && problem.latex.length > 0 && (
+                                            <span className="text-[11px] text-muted-foreground">
+                                                {problem.latex.length} eq
+                                                {problem.latex.length > 1 ? "s" : ""}
+                                            </span>
+                                        )}
+                                    </div>
+                                    {problem.text && (
+                                        <p className="mt-2 text-sm leading-relaxed text-foreground">
+                                            {problem.text}
+                                        </p>
+                                    )}
+                                    {problem.latex && problem.latex.length > 0 && (
+                                        <div className="mt-2 space-y-2 rounded-md bg-zinc-100 p-2 dark:bg-zinc-800">
+                                            {problem.latex.map((eq: string, eqIdx: number) => (
+                                                <div
+                                                    key={`${problem.id}-eq-${eqIdx}`}
+                                                    className="rounded bg-white px-2 py-1 text-sm dark:bg-zinc-900"
+                                                    dangerouslySetInnerHTML={renderLatexHtml(eq)}
+                                                />
+                                            ))}
+                                        </div>
+                                    )}
+                                    {showImage && (
+                                        <div className="mt-2 overflow-hidden rounded-md bg-zinc-100 dark:bg-zinc-800">
+                                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                                            <img
+                                                src={problem.croppedImage}
+                                                alt={problem.title}
+                                                className="w-full object-contain"
+                                            />
+                                        </div>
+                                    )}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                <div className="relative flex-1">
+                    <canvas
+                        ref={canvasRef}
+                        className="h-full w-full touch-none cursor-crosshair bg-transparent"
+                        onMouseDown={startDrawing}
+                        onMouseMove={draw}
+                        onMouseUp={stopDrawing}
+                        onMouseLeave={stopDrawing}
+                        onTouchStart={startDrawing}
+                        onTouchMove={draw}
+                        onTouchEnd={stopDrawing}
+                    />
                 </div>
             </div>
         </div>
