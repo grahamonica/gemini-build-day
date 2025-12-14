@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useRef, useState, useEffect, useCallback } from "react";
-import { Eraser, Pencil, Trash2, Video, Loader2, X, Share2, Download, Copy, Check } from "lucide-react";
+import { Eraser, Pencil, Trash2, Video, Loader2, X, Share2, Download, Copy, Check, Gauge } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Message } from "./Conversation";
 
@@ -35,6 +35,8 @@ export function Whiteboard({ onCapture, onClear }: WhiteboardProps = {}) {
     const [showVideoModal, setShowVideoModal] = useState<boolean>(false);
     const [videoName, setVideoName] = useState<string>("whiteboard-animation");
     const [copied, setCopied] = useState<boolean>(false);
+    const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
+    const videoRef = useRef<HTMLVideoElement | null>(null);
 
     // Timing refs
     const dragStartTime = useRef<number>(0);
@@ -54,9 +56,13 @@ export function Whiteboard({ onCapture, onClear }: WhiteboardProps = {}) {
 
     // Track if we should capture on next draw
     const shouldCaptureRef = useRef<boolean>(false);
-
+    
     // Track frame count when video was last generated
     const lastVideoFrameCountRef = useRef<number>(0);
+    
+    // Throttle frame capture - only capture every 500ms
+    const lastCaptureTimeRef = useRef<number>(0);
+    const CAPTURE_INTERVAL = 500; // Capture frame every 500ms
 
     // Initialize canvas size
     useEffect(() => {
@@ -270,19 +276,27 @@ export function Whiteboard({ onCapture, onClear }: WhiteboardProps = {}) {
         }
     }, []);
 
-    // Capture frame function
+    // Capture frame function with throttling
     const captureFrame = useCallback(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
-
+        
+        const now = Date.now();
+        // Throttle: only capture if enough time has passed since last capture
+        if (now - lastCaptureTimeRef.current < CAPTURE_INTERVAL) {
+            return;
+        }
+        
+        lastCaptureTimeRef.current = now;
+        
         const imageData = canvas.toDataURL("image/png");
         setFrames((prev: Frame[]) => {
             const newFrame: Frame = {
                 imageData,
-                timestamp: Date.now()
+                timestamp: now
             };
             // Only keep frames from the last 5 minutes to avoid memory issues
-            const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+            const fiveMinutesAgo = now - 5 * 60 * 1000;
             const filtered = prev.filter((f: Frame) => f.timestamp > fiveMinutesAgo);
             return [...filtered, newFrame];
         });
@@ -576,16 +590,40 @@ export function Whiteboard({ onCapture, onClear }: WhiteboardProps = {}) {
                         {/* Video Player */}
                         <div className="flex-1 p-4 overflow-auto bg-zinc-50 dark:bg-zinc-950">
                             <video
+                                ref={videoRef}
                                 src={videoUrl || undefined}
                                 controls
                                 autoPlay
                                 loop
                                 className="w-full rounded-lg shadow-lg"
+                                onLoadedMetadata={() => {
+                                    if (videoRef.current) {
+                                        videoRef.current.playbackRate = playbackSpeed;
+                                    }
+                                }}
                             />
                         </div>
 
                         {/* Actions */}
                         <div className="p-4 border-t border-zinc-200 dark:border-zinc-800 flex items-center gap-3">
+                            {/* Playback Speed Control */}
+                            <button
+                                onClick={() => {
+                                    const speeds = [1, 2, 3, 4, 5];
+                                    const currentIndex = speeds.indexOf(playbackSpeed);
+                                    const nextSpeed = speeds[(currentIndex + 1) % speeds.length];
+                                    setPlaybackSpeed(nextSpeed);
+                                    if (videoRef.current) {
+                                        videoRef.current.playbackRate = nextSpeed;
+                                    }
+                                }}
+                                className="flex items-center gap-2 px-3 py-2 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded-lg transition-colors"
+                                title="Change playback speed"
+                            >
+                                <Gauge className="w-4 h-4" />
+                                <span className="text-sm font-medium">{playbackSpeed}x</span>
+                            </button>
+                            
                             <button
                                 onClick={async () => {
                                     if (navigator.share && videoUrl) {
