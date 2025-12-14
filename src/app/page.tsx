@@ -155,7 +155,7 @@ export default function Home() {
   };
 
   return (
-    <div className="flex min-h-screen w-full flex-col bg-zinc-50 dark:bg-black select-none overflow-x-hidden overflow-y-auto">
+    <div className="flex h-screen w-full flex-col bg-zinc-50 dark:bg-black select-none overflow-hidden">
       <div className="flex-none p-4 md:p-6 pb-2">
         <PdfParser />
       </div>
