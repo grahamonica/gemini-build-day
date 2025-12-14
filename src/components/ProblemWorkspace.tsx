@@ -33,6 +33,9 @@ export function ProblemWorkspace({ problems }: ProblemWorkspaceProps) {
     const activeSession = sessions[activeIdx] ?? sessions[0];
 
     const handleCapture = async (sessionIdx: number, imageData: string) => {
+        const session = sessions[sessionIdx];
+        if (!session) return;
+
         try {
             const response = await fetch("/api/solve", {
                 method: "POST",
@@ -41,6 +44,9 @@ export function ProblemWorkspace({ problems }: ProblemWorkspaceProps) {
                     image: imageData,
                     history: [],
                     isReply: false,
+                    problemText: session.problem.text,
+                    problemSummary: session.problem.summary,
+                    problemImage: session.problem.imageBase64 || null,
                 }),
             });
 
@@ -56,6 +62,7 @@ export function ProblemWorkspace({ problems }: ProblemWorkspaceProps) {
                 isResolved: false,
                 createdAt: Date.now(),
                 unread: true,
+                topic: data.topic || "AI Feedback",
             };
 
             setSessions((prev) =>
@@ -115,6 +122,9 @@ export function ProblemWorkspace({ problems }: ProblemWorkspaceProps) {
                     history: thread.messages,
                     replyText: text,
                     isReply: true,
+                    problemText: session.problem.text,
+                    problemSummary: session.problem.summary,
+                    problemImage: session.problem.imageBase64 || null,
                 }),
             });
 
