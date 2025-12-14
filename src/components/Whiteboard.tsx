@@ -18,9 +18,10 @@ interface Stroke {
 
 interface WhiteboardProps {
     onCapture: (imageData: string) => void;
+    onClear?: () => void;
 }
 
-export function Whiteboard({ onCapture }: WhiteboardProps) {
+export function Whiteboard({ onCapture, onClear }: WhiteboardProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [color, setColor] = useState("#000000");
     const [brushSize, setBrushSize] = useState(3);
@@ -305,6 +306,7 @@ export function Whiteboard({ onCapture }: WhiteboardProps) {
     const clearCanvas = () => {
         strokes.current = [];
         requestRender();
+        if (onClear) onClear();
     };
 
     return (

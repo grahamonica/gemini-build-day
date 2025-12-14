@@ -15,6 +15,7 @@ export type Thread = {
     isResolved: boolean;
     createdAt: number;
     unread: boolean;
+    topic: string;
 };
 
 interface ConversationProps {
@@ -43,9 +44,9 @@ export function Conversation({ threads, onReply, onResolve }: ConversationProps)
     );
 
     return (
-        <div className="h-full w-full flex flex-col bg-white dark:bg-zinc-900 border-l border-border">
+        <div className="h-full w-full bg-white dark:bg-zinc-900 border-l border-border relative">
             {/* Filter Header */}
-            <div className="flex-none p-2 border-b border-border flex justify-end bg-zinc-50/50 dark:bg-zinc-900/50 backdrop-blur-sm">
+            <div className="absolute top-0 left-0 right-0 h-10 border-b border-border flex items-center justify-end px-2 bg-zinc-50/50 dark:bg-zinc-900/50 backdrop-blur-sm z-10">
                 <button
                     onClick={() => setShowResolved(!showResolved)}
                     className="text-xs flex items-center gap-1.5 px-2 py-1.5 rounded-md hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors text-muted-foreground font-medium"
@@ -58,7 +59,7 @@ export function Conversation({ threads, onReply, onResolve }: ConversationProps)
             {/* Thread List */}
             <div
                 ref={scrollRef}
-                className="flex-1 overflow-y-auto p-4 flex flex-col gap-4"
+                className="absolute top-10 bottom-0 left-0 right-0 overflow-y-auto p-4 flex flex-col gap-4"
             >
                 {displayedThreads.map((thread) => (
                     <ThreadView
@@ -92,12 +93,12 @@ function ThreadView({ thread, onReply, onResolve }: {
     if (thread.isResolved && !isExpanded) {
         return (
             <div
-                className="group flex items-center justify-between p-3 rounded-lg border border-border bg-zinc-50 dark:bg-zinc-800/50 opacity-60 hover:opacity-100 transition-all cursor-pointer"
+                className="group flex items-center justify-between p-3 rounded-lg border border-border bg-zinc-50 dark:bg-zinc-800/50 opacity-60 hover:opacity-100 transition-all cursor-pointer flex-none"
                 onClick={() => setIsExpanded(true)}
             >
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Check className="w-4 h-4 text-green-500" />
-                    <span className="truncate max-w-[150px]">Resolved Thread</span>
+                    <span className="truncate max-w-[150px]">{thread.topic || "Resolved Thread"}</span>
                 </div>
                 <span className="text-xs text-muted-foreground">{new Date(thread.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
             </div>
@@ -106,7 +107,7 @@ function ThreadView({ thread, onReply, onResolve }: {
 
     return (
         <div className={cn(
-            "flex flex-col rounded-lg border border-border shadow-sm overflow-hidden bg-zinc-50 dark:bg-zinc-900",
+            "flex flex-col rounded-lg border border-border shadow-sm overflow-hidden bg-zinc-50 dark:bg-zinc-900 flex-none",
             thread.isResolved && "opacity-75"
         )}>
             {/* Thread Header */}
@@ -115,8 +116,11 @@ function ThreadView({ thread, onReply, onResolve }: {
                     <div className="bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 p-1 rounded">
                         <MessageCircle className="w-3 h-3" />
                     </div>
-                    <span className="text-xs font-medium text-muted-foreground">
-                        {new Date(thread.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    <span className="text-xs font-medium text-zinc-900 dark:text-zinc-100">
+                        {thread.topic}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                        • {new Date(thread.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>
                 </div>
                 <button
