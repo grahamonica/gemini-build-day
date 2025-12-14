@@ -3,7 +3,7 @@
 import React, { useRef, useState, useEffect, useCallback } from "react";
 import { Eraser, Pencil, Trash2, Video, Loader2, X, Share2, Download, Copy, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Conversation, Message } from "./Conversation";
+import { Message } from "./Conversation";
 
 interface Point {
     x: number;
@@ -15,12 +15,17 @@ interface Frame {
     timestamp: number;
 }
 
-export function Whiteboard() {
+interface WhiteboardProps {
+    onCapture?: (imageData: string) => void;
+}
+
+export function Whiteboard({ onCapture }: WhiteboardProps = {}) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [isDrawing, setIsDrawing] = useState(false);
     const [color, setColor] = useState("#000000");
     const [brushSize, setBrushSize] = useState(3);
-    const [messages, setMessages] = useState<Message[]>([]);
+    // Messages kept for video name generation (optional, can be removed if not needed)
+    const [messages] = useState<Message[]>([]);
     const [frames, setFrames] = useState<Frame[]>([]);
     const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
     const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -111,94 +116,6 @@ export function Whiteboard() {
         }
     }, [color, brushSize]);
 
-    const captureAndSend = async () => {
-        if (!canvasRef.current) {
-            console.log("captureAndSend: No canvas available");
-            return;
-        }
-
-        console.log("captureAndSend: Starting capture and send");
-        const imageData = canvasRef.current.toDataURL("image/png");
-        const newMessageId = Date.now().toString();
-
-        // Optimistically add user message
-        const userMsg: Message = { role: 'user', content: imageData, id: newMessageId };
-        setMessages(prev => [...prev, userMsg]);
-        console.log("captureAndSend: User message added, sending to API...");
-
-        try {
-            const response = await fetch("/api/solve", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    image: imageData,
-                    history: messages // Send previous context
-                }),
-            });
-
-            console.log("captureAndSend: Response received", response.status, response.statusText);
-
-            if (!response.ok) {
-                // Try to get error message from response
-                let errorMessage = `Server error: ${response.status} ${response.statusText}`;
-                try {
-                    const errorData = await response.json();
-                    if (errorData.error) {
-                        errorMessage = errorData.error;
-                    }
-                } catch (e) {
-                    // If response isn't JSON, use status text
-                }
-                throw new Error(errorMessage);
-            }
-
-            const data = await response.json();
-            console.log("captureAndSend: Response data:", data);
-
-            if (!data || !data.text) {
-                console.error("captureAndSend: Invalid response data:", data);
-                throw new Error("Invalid response from server");
-            }
-
-            const aiMsg: Message = {
-                role: 'model',
-                content: data.text,
-                id: (Date.now() + 1).toString()
-            };
-            console.log("captureAndSend: Adding AI message:", aiMsg.content);
-            setMessages(prev => {
-                const updated = [...prev, aiMsg];
-                console.log("captureAndSend: Updated messages:", updated.length);
-                return updated;
-            });
-
-        } catch (error) {
-            console.error("Error in captureAndSend:", error);
-            
-            // Don't remove user message if it's a quota error (user should see their message)
-            const errorMessage = error instanceof Error ? error.message : "Failed to get AI response";
-            
-            // Only remove user message for non-quota errors
-            if (!errorMessage.includes("quota") && !errorMessage.includes("429")) {
-                setMessages(prev => prev.filter(msg => msg.id !== newMessageId));
-            }
-            
-            // Show user-friendly error message
-            let displayMessage = errorMessage;
-            if (errorMessage.includes("quota") || errorMessage.includes("429")) {
-                displayMessage = "⚠️ API quota exceeded. The free tier has daily limits. Please:\n\n• Wait a few minutes and try again\n• Check your Google Cloud Console for quota limits\n• Consider upgrading your billing account for higher quotas";
-            } else if (errorMessage.includes("API_KEY")) {
-                displayMessage = "❌ API key error. Please check your GEMINI_API_KEY in .env.local";
-            }
-            
-            const errorMsg: Message = {
-                role: 'model',
-                content: displayMessage,
-                id: (Date.now() + 1).toString()
-            };
-            setMessages(prev => [...prev, errorMsg]);
-        }
-    };
 
     const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
         // Clear any pending idle timer because user is interacting again
@@ -254,12 +171,15 @@ export function Whiteboard() {
 
         // Logic: specific time threshold for "work unit"
         // Increased threshold and delay to reduce API calls and avoid quota limits
-        if (dragDuration > 1000) { // Only capture if drawing for at least 1 second
+        if (dragDuration > 1000 && onCapture) { // Only capture if drawing for at least 1 second
             // Schedule capture with longer delay to batch requests
             console.log("stopDrawing: Scheduling capture in 2 seconds");
             idleTimer.current = setTimeout(() => {
-                console.log("stopDrawing: Timer fired, calling captureAndSend");
-                captureAndSend();
+                console.log("stopDrawing: Timer fired, calling onCapture");
+                if (canvasRef.current) {
+                    const imageData = canvasRef.current.toDataURL("image/png");
+                    onCapture(imageData);
+                }
             }, 2000); // 2s pause to reduce frequency
         } else {
             console.log("stopDrawing: Drag too short, not capturing");
@@ -292,7 +212,7 @@ export function Whiteboard() {
             ctx.fillStyle = "#ffffff";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
-        setMessages([]); // Clear conversation on canvas clear? Maybe optional.
+        // Messages are now managed at page level, no need to clear here
         setFrames([]); // Clear frames when canvas is cleared
         setVideoUrl(null); // Clear video URL
         setShowVideoModal(false); // Close modal
@@ -543,9 +463,6 @@ export function Whiteboard() {
 
     return (
         <div className="relative w-full h-full bg-white dark:bg-zinc-950 rounded-xl overflow-hidden shadow-sm border border-border">
-            {/* Conversation Overlay */}
-            <Conversation messages={messages} />
-
             {/* Canvas */}
             <canvas
                 ref={canvasRef}
