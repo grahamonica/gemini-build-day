@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Whiteboard } from "@/components/Whiteboard";
 import { Conversation, Thread, Message } from "@/components/Conversation";
 import { cn } from "@/lib/utils";
@@ -11,7 +10,7 @@ import { ParsedProblem } from "@/types/problems";
 
 export default function Home() {
   const [threads, setThreads] = useState<Thread[]>([]);
-  const [isChatOpen, setIsChatOpen] = useState(true);
+
   const [parsedProblems, setParsedProblems] = useState<ParsedProblem[]>([]);
 
   // Computed state for unread notification
@@ -64,8 +63,7 @@ export default function Home() {
 
         setThreads(prev => [...prev, newThread]);
 
-        // Auto-open chat if closed
-        if (!isChatOpen) setIsChatOpen(true);
+
       } else {
         console.log("No comment returned from API (data.comment is null or undefined)");
       }
@@ -169,20 +167,9 @@ export default function Home() {
         </div>
       ) : (
         <>
-          <header className="flex-none px-4 md:px-6 pt-2 pb-2 flex items-center justify-end">
-            <button
-              onClick={() => setIsChatOpen(!isChatOpen)}
-              className="relative p-2 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors"
-              title={isChatOpen ? "Close Chat" : "Open Chat"}
-            >
-              {unreadCount > 0 && !isChatOpen && (
-                <span className="absolute top-0 right-0 w-3 h-3 bg-blue-500 rounded-full border-2 border-zinc-50 dark:border-black" />
-              )}
-              {isChatOpen ? <PanelRightClose className="w-5 h-5 text-zinc-600 dark:text-zinc-400" /> : <PanelRightOpen className="w-5 h-5 text-zinc-600 dark:text-zinc-400" />}
-            </button>
-          </header>
 
-          <main className="flex-1 w-full min-h-0 flex flex-col md:flex-row gap-4 p-4 md:p-6 pt-0">
+
+          <main className="flex-1 w-full min-h-0 flex flex-col sm:flex-row gap-4 p-4 md:p-6 pt-0">
             {/* Whiteboard Container - Grows to fill space */}
             <div className="flex-1 relative min-h-0 rounded-xl overflow-hidden shadow-sm border border-border">
               <Whiteboard onCapture={handleCapture} />
@@ -190,12 +177,7 @@ export default function Home() {
 
             {/* Chat Sidebar - Collapsable */}
             <div
-              className={cn(
-                "flex-none rounded-xl overflow-hidden shadow-sm border border-border bg-white dark:bg-zinc-900 transition-all duration-300 ease-in-out",
-                isChatOpen
-                  ? "w-full h-1/3 md:h-full md:w-80 opacity-100 translate-x-0"
-                  : "w-0 h-0 md:w-0 md:h-full opacity-0 translate-x-full md:translate-x-0 overflow-hidden border-0 m-0 p-0"
-              )}
+              className="flex-none rounded-xl overflow-hidden shadow-sm border border-border bg-white dark:bg-zinc-900 w-full h-1/3 sm:h-full sm:w-80"
             >
               <div className="w-full h-full md:w-80">
                 <Conversation
