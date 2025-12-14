@@ -25,7 +25,7 @@ export function Whiteboard() {
     const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
     const [videoUrl, setVideoUrl] = useState<string | null>(null);
     const [videoProgress, setVideoProgress] = useState<number>(0);
-    const [videoMethod, setVideoMethod] = useState<"ffmpeg" | "media-recorder" | null>(null);
+    const [videoMethod, setVideoMethod] = useState<"nano-banana" | "media-recorder" | null>(null);
     const [showVideoModal, setShowVideoModal] = useState<boolean>(false);
     const [videoName, setVideoName] = useState<string>("whiteboard-animation");
     const [copied, setCopied] = useState<boolean>(false);
@@ -45,6 +45,12 @@ export function Whiteboard() {
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const recordedChunksRef = useRef<Blob[]>([]);
     const isRecordingRef = useRef<boolean>(false);
+    
+    // Track if we should capture on next draw
+    const shouldCaptureRef = useRef<boolean>(false);
+    
+    // Track frame count when video was last generated
+    const lastVideoFrameCountRef = useRef<number>(0);
 
     // Initialize canvas size
     useEffect(() => {
@@ -206,6 +212,9 @@ export function Whiteboard() {
 
         const { x, y } = getCoordinates(e);
         lastPoint.current = { x, y };
+        
+        // Mark that we should capture after the next draw
+        shouldCaptureRef.current = true;
     };
 
     const draw = (e: React.MouseEvent | React.TouchEvent) => {
@@ -222,12 +231,22 @@ export function Whiteboard() {
         ctx.stroke();
 
         lastPoint.current = { x, y };
+        
+        // Capture frame after each stroke/movement (this is like a "keystroke" for drawing)
+        if (shouldCaptureRef.current) {
+            captureFrame();
+            shouldCaptureRef.current = true; // Keep capturing for continuous strokes
+        }
     };
 
     const stopDrawing = () => {
         if (!isDrawing) return;
         setIsDrawing(false);
         lastPoint.current = null;
+        shouldCaptureRef.current = false;
+        
+        // Capture final frame when stroke ends
+        captureFrame();
 
         const dragDuration = Date.now() - dragStartTime.current;
 
@@ -279,6 +298,7 @@ export function Whiteboard() {
         setShowVideoModal(false); // Close modal
         recordedChunksRef.current = []; // Clear recorded chunks
         stopRecording(); // Stop any active recording
+        lastVideoFrameCountRef.current = 0; // Reset video frame count
     };
 
     // Start recording canvas using MediaRecorder (more efficient)
@@ -316,8 +336,6 @@ export function Whiteboard() {
             console.log("Started recording canvas");
         } catch (error) {
             console.error("Error starting MediaRecorder:", error);
-            // Fallback to frame capture if MediaRecorder fails
-            startFrameCapture();
         }
     }, []);
     
@@ -331,27 +349,24 @@ export function Whiteboard() {
         }
     }, []);
     
-    // Frame capture - captures every 2 seconds
-    const startFrameCapture = useCallback(() => {
-        if (frameCaptureInterval.current) return; // Already capturing
+    // Capture frame function
+    const captureFrame = useCallback(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
         
-        frameCaptureInterval.current = setInterval(() => {
-            const canvas = canvasRef.current;
-            if (!canvas) return;
-            
-            const imageData = canvas.toDataURL("image/png");
-            setFrames((prev: Frame[]) => {
-                const newFrame: Frame = {
-                    imageData,
-                    timestamp: Date.now()
-                };
-                // Only keep frames from the last 5 minutes to avoid memory issues
-                const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
-                const filtered = prev.filter((f: Frame) => f.timestamp > fiveMinutesAgo);
-                return [...filtered, newFrame];
-            });
-        }, 2000); // Capture every 2 seconds
-    }, []);
+        const imageData = canvas.toDataURL("image/png");
+        setFrames((prev: Frame[]) => {
+            const newFrame: Frame = {
+                imageData,
+                timestamp: Date.now()
+            };
+            // Only keep frames from the last 5 minutes to avoid memory issues
+            const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+            const filtered = prev.filter((f: Frame) => f.timestamp > fiveMinutesAgo);
+            return [...filtered, newFrame];
+        });
+        console.log("Frame captured, total frames:", frames.length + 1);
+    }, [frames.length]);
 
     const stopFrameCapture = useCallback(() => {
         if (frameCaptureInterval.current) {
@@ -360,18 +375,6 @@ export function Whiteboard() {
         }
     }, []);
 
-    // Start frame capture when user starts drawing
-    useEffect(() => {
-        if (isDrawing) {
-            startFrameCapture();
-        } else {
-            // Continue capturing for a bit after drawing stops
-            const timeout = setTimeout(() => {
-                stopFrameCapture();
-            }, 2000);
-            return () => clearTimeout(timeout);
-        }
-    }, [isDrawing, startFrameCapture, stopFrameCapture]);
 
     // Cleanup on unmount
     useEffect(() => {
@@ -433,8 +436,14 @@ export function Whiteboard() {
     }, []);
 
     const generateVideo = async () => {
-        if (!canvasRef.current) {
-            alert("No canvas available.");
+        if (!canvasRef.current || frames.length === 0) {
+            alert("No frames captured. Please draw something first!");
+            return;
+        }
+
+        // Check if there are new frames since last video generation
+        if (frames.length <= lastVideoFrameCountRef.current) {
+            alert("No new drawing since last video. Please draw something new to generate a new video!");
             return;
         }
 
@@ -443,144 +452,83 @@ export function Whiteboard() {
         setVideoProgress(0);
         setVideoMethod("media-recorder");
         isCancelledRef.current = false;
-        abortControllerRef.current = new AbortController();
-        gifInstanceRef.current = null;
 
         try {
-            // Check if cancelled before starting
-            if (isCancelledRef.current) {
-                return;
-            }
-
-            // First, try to use recorded video from MediaRecorder
-            if (recordedChunksRef.current.length > 0 && !isRecordingRef.current) {
-                setVideoProgress(50);
-                const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
-                const url = URL.createObjectURL(blob);
-                setVideoUrl(url);
-                setVideoName(generateVideoName());
-                setIsGeneratingVideo(false);
-                setVideoProgress(0);
-                setVideoMethod(null);
-                setShowVideoModal(true);
-                return;
-            }
-
-            // If no recording available, fall back to frame-based generation
-            if (frames.length === 0) {
-                alert("No drawing history to create video from. Please draw something first.");
-                setIsGeneratingVideo(false);
-                setVideoMethod(null);
-                return;
-            }
-
-            setVideoMethod("ffmpeg");
-            setVideoProgress(10);
-            
-            // Capture current state as final frame
+            // Add current canvas state as final frame
             const currentFrame = canvasRef.current.toDataURL("image/png");
             const allFrames = [...frames, { imageData: currentFrame, timestamp: Date.now() }];
 
-            // Try server-side video generation with FFmpeg
-            try {
-                setVideoMethod("ffmpeg");
-                setVideoProgress(10); // Starting
-                
-                // Simulate progress during processing
-                const progressInterval = setInterval(() => {
-                    if (!isCancelledRef.current && isGeneratingVideo) {
-                        setVideoProgress(prev => {
-                            // Gradually increase from 10% to 80% while processing
-                            if (prev < 80) {
-                                return Math.min(80, prev + 3);
-                            }
-                            return prev;
-                        });
-                    }
-                }, 300);
-                
-                const response = await fetch("/api/nano-banana", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        frames: allFrames.map(f => f.imageData)
-                    }),
-                    signal: abortControllerRef.current.signal,
-                });
+            console.log(`Generating video from ${allFrames.length} frames...`);
+            setVideoProgress(10);
 
-                clearInterval(progressInterval);
+            // Use canvas.captureStream() for smooth video generation
+            const canvas = canvasRef.current;
+            
+            // Create a temporary canvas to replay frames
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = canvas.width;
+            tempCanvas.height = canvas.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            if (!tempCtx) throw new Error("Could not get context");
 
-                // Check if cancelled after fetch
+            const tempStream = tempCanvas.captureStream(30);
+            const mediaRecorder = new MediaRecorder(tempStream, {
+                mimeType: 'video/webm;codecs=vp9',
+                videoBitsPerSecond: 2500000
+            });
+
+            const chunks: Blob[] = [];
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) chunks.push(e.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(chunks, { type: 'video/webm' });
+                const url = URL.createObjectURL(blob);
+                setVideoUrl(url);
+                setVideoName(generateVideoName());
+                setVideoProgress(100);
+                setIsGeneratingVideo(false);
+                setVideoMethod(null);
+                // Update the frame count when video is successfully generated
+                lastVideoFrameCountRef.current = frames.length;
+                setShowVideoModal(true);
+            };
+
+            // Start recording
+            mediaRecorder.start();
+            setVideoProgress(30);
+
+            // Replay frames onto temp canvas
+            const frameDuration = 100; // ms per frame (10 fps playback)
+            for (let i = 0; i < allFrames.length; i++) {
                 if (isCancelledRef.current) {
-                    return;
-                }
-
-                if (response.ok) {
-                    const contentType = response.headers.get("content-type");
-                    if (contentType && contentType.includes("video")) {
-                        setVideoProgress(90); // Video received
-                        const blob = await response.blob();
-                        
-                        // Check if cancelled before setting video
-                        if (isCancelledRef.current) {
-                            return;
-                        }
-                        
-                        setVideoProgress(100); // Complete
-                        const url = URL.createObjectURL(blob);
-                        setVideoUrl(url);
-                        setVideoName(generateVideoName());
-                        setIsGeneratingVideo(false);
-                        setVideoProgress(0);
-                        setVideoMethod(null);
-                        setShowVideoModal(true); // Show modal
-                        return; // Success!
-                    }
-                }
-
-                // If server-side fails, check error and decide on fallback
-                const errorData = await response.json().catch(() => null);
-                const errorMessage = errorData?.error || "Server-side generation failed";
-                
-                console.log("FFmpeg response:", { status: response.status, error: errorMessage });
-                
-                // Show clear error message instead of falling back to GIF
-                throw new Error(errorMessage);
-            } catch (serverError: any) {
-                // Check if it was a cancellation
-                if (serverError.name === 'AbortError' || isCancelledRef.current) {
-                    console.log("Video generation cancelled");
+                    mediaRecorder.stop();
                     return;
                 }
                 
-                // Show error to user - no GIF fallback
-                throw serverError;
+                await new Promise<void>((resolve) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        tempCtx.drawImage(img, 0, 0);
+                        setVideoProgress(Math.round(30 + (i / allFrames.length) * 60));
+                        setTimeout(resolve, frameDuration);
+                    };
+                    img.onerror = () => resolve(); // Skip failed frames
+                    img.src = allFrames[i].imageData;
+                });
             }
-        } catch (error: any) {
-            // Don't show error if it was cancelled
-            if (error.name === 'AbortError' || error.message === "Cancelled" || isCancelledRef.current) {
-                console.log("Video generation cancelled by user");
-                return;
-            }
-            
+
+            // Stop recording
+            setVideoProgress(90);
+            mediaRecorder.stop();
+
+        } catch (error) {
             console.error("Error generating video:", error);
-            const errorMessage = error instanceof Error ? error.message : "Failed to generate video. Please try again.";
-            
-            // Show error in a more user-friendly way
-            if (errorMessage.includes("ffmpeg") || errorMessage.includes("FFmpeg")) {
-                const detailedMessage = `FFmpeg is required for video generation.\n\nTo install:\n1. Open Terminal\n2. Run: brew install ffmpeg\n\nOr download from: https://evermeet.cx/ffmpeg/\n\nAfter installing, restart your dev server.`;
-                alert(detailedMessage);
-            } else {
-                alert(errorMessage);
-            }
-            
+            alert("Failed to generate video: " + (error instanceof Error ? error.message : "Unknown error"));
             setIsGeneratingVideo(false);
             setVideoProgress(0);
             setVideoMethod(null);
-        } finally {
-            // Cleanup
-            abortControllerRef.current = null;
-            gifInstanceRef.current = null;
         }
     };
 
@@ -646,33 +594,28 @@ export function Whiteboard() {
                         <div className="flex items-center gap-2 px-3 py-1.5 text-xs text-zinc-600 dark:text-zinc-400 bg-zinc-50 dark:bg-zinc-800 rounded-full">
                             <Loader2 className="w-4 h-4 animate-spin" />
                             <span className="font-medium">Generating {videoProgress}%</span>
-                            {videoMethod && (
-                                <span className={cn(
-                                    "px-2 py-0.5 rounded text-[10px] font-semibold",
-                                    videoMethod === "media-recorder"
-                                        ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300"
-                                        : videoMethod === "ffmpeg" 
-                                        ? "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
-                                        : "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300"
-                                )}>
-                                    {videoMethod === "media-recorder" ? "Recording" : "FFmpeg"}
-                                </span>
-                            )}
                         </div>
                     </>
                 ) : (
                     <button
                         onClick={generateVideo}
-                        disabled={frames.length === 0}
+                        disabled={frames.length === 0 || isGeneratingVideo || frames.length <= lastVideoFrameCountRef.current}
                         className={cn(
                             "p-2 rounded-full transition-colors flex items-center gap-2",
-                            frames.length === 0
+                            frames.length === 0 || isGeneratingVideo || frames.length <= lastVideoFrameCountRef.current
                                 ? "opacity-50 cursor-not-allowed"
                                 : "hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-600 dark:text-blue-400"
                         )}
-                        title="Nano Banana - Create animated video"
+                        title={
+                            frames.length === 0 
+                                ? "No frames captured. Draw something first!"
+                                : frames.length <= lastVideoFrameCountRef.current
+                                ? "No new drawing since last video. Draw something new!"
+                                : `Generate video (${frames.length} frames captured)`
+                        }
                     >
                         <Video className="w-5 h-5" />
+                        <span className="text-sm">{frames.length}</span>
                     </button>
                 )}
 
@@ -698,15 +641,9 @@ export function Whiteboard() {
                     >
                         {/* Header */}
                         <div className="flex items-center justify-between p-4 border-b border-zinc-200 dark:border-zinc-800">
-                            <div className="flex-1">
-                                <input
-                                    type="text"
-                                    value={videoName}
-                                    onChange={(e) => setVideoName(e.target.value)}
-                                    className="text-lg font-semibold bg-transparent border-none outline-none w-full text-zinc-900 dark:text-zinc-100"
-                                    placeholder="Video name"
-                                />
-                            </div>
+                            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+                                Whiteboard Animation ({frames.length} frames)
+                            </h2>
                             <button
                                 onClick={() => {
                                     setShowVideoModal(false);
@@ -719,12 +656,13 @@ export function Whiteboard() {
                         </div>
 
                         {/* Video Player */}
-                        <div className="flex-1 p-4 overflow-auto">
+                        <div className="flex-1 p-4 overflow-auto bg-zinc-50 dark:bg-zinc-950">
                             <video
-                                src={videoUrl}
+                                src={videoUrl || undefined}
                                 controls
-                                className="w-full rounded-lg"
                                 autoPlay
+                                loop
+                                className="w-full rounded-lg shadow-lg"
                             />
                         </div>
 
@@ -732,57 +670,47 @@ export function Whiteboard() {
                         <div className="p-4 border-t border-zinc-200 dark:border-zinc-800 flex items-center gap-3">
                             <button
                                 onClick={async () => {
-                                    try {
-                                        await navigator.clipboard.writeText(videoUrl);
-                                        setCopied(true);
-                                        setTimeout(() => setCopied(false), 2000);
-                                    } catch (err) {
-                                        console.error("Failed to copy:", err);
-                                    }
-                                }}
-                                className="flex items-center gap-2 px-4 py-2 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded-lg transition-colors"
-                            >
-                                {copied ? (
-                                    <>
-                                        <Check className="w-4 h-4" />
-                                        <span>Copied!</span>
-                                    </>
-                                ) : (
-                                    <>
-                                        <Copy className="w-4 h-4" />
-                                        <span>Copy Link</span>
-                                    </>
-                                )}
-                            </button>
-
-                            <button
-                                onClick={async () => {
                                     if (navigator.share && videoUrl) {
                                         try {
                                             const blob = await fetch(videoUrl).then(r => r.blob());
-                                            const file = new File([blob], `${videoName}.mp4`, { type: blob.type });
+                                            const file = new File([blob], `${videoName}.webm`, { type: blob.type });
                                             await navigator.share({
                                                 title: videoName,
                                                 files: [file]
                                             });
                                         } catch (err) {
-                                            console.error("Share failed:", err);
+                                            // If share fails or is cancelled, try copying the URL
+                                            if (err instanceof Error && err.name !== 'AbortError') {
+                                                try {
+                                                    await navigator.clipboard.writeText(videoUrl);
+                                                    alert("Video URL copied to clipboard!");
+                                                } catch (clipboardErr) {
+                                                    console.error("Share and clipboard copy failed:", clipboardErr);
+                                                }
+                                            }
+                                        }
+                                    } else if (videoUrl) {
+                                        // Fallback: copy URL to clipboard
+                                        try {
+                                            await navigator.clipboard.writeText(videoUrl);
+                                            alert("Video URL copied to clipboard!");
+                                        } catch (err) {
+                                            console.error("Failed to copy URL:", err);
                                         }
                                     }
                                 }}
-                                className="flex items-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors"
+                                className="flex items-center gap-2 px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg transition-colors"
                             >
                                 <Share2 className="w-4 h-4" />
                                 <span>Share</span>
                             </button>
-
                             <a
-                                href={videoUrl}
-                                download={`${videoName}.mp4`}
-                                className="flex items-center gap-2 px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg transition-colors ml-auto"
+                                href={videoUrl || undefined}
+                                download="whiteboard-animation.webm"
+                                className="flex items-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors ml-auto"
                             >
                                 <Download className="w-4 h-4" />
-                                <span>Download</span>
+                                <span>Download Video</span>
                             </a>
                         </div>
                     </div>
