@@ -12,7 +12,7 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-        const { image, history, isReply, replyText } = await req.json();
+        const { image, history, isReply, replyText, existingTopics } = await req.json();
 
         if (!image) {
             return NextResponse.json(
@@ -61,41 +61,77 @@ export async function POST(req: NextRequest) {
         }
 
         const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({
-            model: "gemini-2.5-flash",
-            systemInstruction: `You are a supportive math tutor. The user is writing on a whiteboard.
-            
+
+        // Separate System Prompts and Schemas for the two modes
+
+
+        // 1. Snapshot Mode: Evaluate the board, start new threads if needed.
+        const snapshotSystemPrompt = `You are a supportive math tutor watching a user write on a whiteboard.
+
             Context:
             - The conversation starts with a snapshot of the whiteboard.
-            - You (the model) may have commented on it.
-            - The user may be replying to you.
+            - You are "watching" the board updates.
 
-            Your Goal: Provide helpful feedback via comments.
+            Your Goal: Evaluate the work.Provide helpful feedback via comments ONLY if necessary.Do not give the user the answer, only provide feedback to steer them towards the right answer.
             
             Rules:
-            1. If "isReply" is true (User replied to you), ANSWER their question directly and concisely.
-            2. If "isReply" is false (Just a snapshot update):
-               - Provide brief, encouraging feedback or a gentle question to guide them.
-               - If work is correct, say something positive like "Good progress!" or "Nice work!"
-               - If there's a mistake, point it out gently.
-               - If they're stuck, ask a helpful question.
-               - Always provide a comment (never return null).
+            1. Only comment if necessary(mistake, completion, helpful hint).
+            2. If work is in progress and looks ok, return null.
+            3. If you comment, simple "Good job" is discouraged unless the problem is fully solved.
             
             Output Format:
-            Return valid JSON with a single field "comment" which is a string (never null).
-            `,
+            Return valid JSON with:
+            - "comment": string or null
+            - "topic": string or null(Short 2 - 5 word title for the thread if a comment is generated)
+        `;
+
+        const snapshotSchema = {
+            type: SchemaType.OBJECT,
+            properties: {
+                comment: {
+                    type: SchemaType.STRING,
+                    nullable: true,
+                },
+                topic: {
+                    type: SchemaType.STRING,
+                    nullable: true,
+                }
+            },
+            required: ["comment", "topic"]
+        };
+
+        // 2. Reply Mode: Continue an existing conversation/thread.
+        const replySystemPrompt = `You are a supportive math tutor.The user is replying to a comment you made on their whiteboard.
+
+            Context:
+        - This is an existing thread.
+            - You should reply to the user's message.
+
+            Your Goal: Answer their question directly and concisely.Do not give the user the answer, only provide feedback to steer them towards the right answer.
+            
+            Output Format:
+            Return valid JSON with:
+        - "comment": string(Your response)
+            `;
+
+        const replySchema = {
+            type: SchemaType.OBJECT,
+            properties: {
+                comment: {
+                    type: SchemaType.STRING,
+                    nullable: false,
+                }
+            },
+            required: ["comment"]
+        };
+
+        const model = genAI.getGenerativeModel({
+            model: "gemini-2.5-flash",
+            systemInstruction: isReply ? replySystemPrompt : snapshotSystemPrompt,
             generationConfig: {
                 responseMimeType: "application/json",
-                responseSchema: {
-                    type: SchemaType.OBJECT,
-                    properties: {
-                        comment: {
-                            type: SchemaType.STRING,
-                            nullable: false,
-                        }
-                    },
-                    required: ["comment"]
-                }
+                // @ts-ignore - The types for Schema are slightly finicky in some versions, but this structure is correct.
+                responseSchema: isReply ? replySchema : snapshotSchema
             }
         });
 
@@ -141,24 +177,63 @@ export async function POST(req: NextRequest) {
             parsed = { comment: jsonText };
         }
 
-        const comment = parsed.comment;
-        console.log("Returning comment:", comment);
+        // Check redundancy if we have a new thread proposal (comment + topic) and not a reply
+        let { comment, topic } = parsed;
+
+        if (!isReply && comment && topic && existingTopics && existingTopics.length > 0) {
+            try {
+                const redundancyModel = genAI.getGenerativeModel({
+                    model: "gemini-2.5-flash",
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: SchemaType.OBJECT,
+                            properties: {
+                                redundant: { type: SchemaType.BOOLEAN }
+                            },
+                            required: ["redundant"]
+                        }
+                    }
+                });
+
+                const prompt = `
+                New Topic: "${topic}"
+                Existing Topics: ${JSON.stringify(existingTopics)}
+                
+                Is the New Topic redundant with any of the Existing Topics ?
+            If it is semantically very similar or covers the same ground, return true.
+                `;
+
+                const result = await redundancyModel.generateContent(prompt);
+                const check = JSON.parse(result.response.text());
+
+                if (check.redundant) {
+                    console.log(`Topic "${topic}" rejected as redundant.`);
+                    comment = null;
+                    topic = null;
+                }
+            } catch (err) {
+                console.error("Redundancy check failed:", err);
+                // Fail open? Or fail closed? Let's fail open (allow the comment) to be safe.
+            }
+        }
 
         return NextResponse.json({
             comment: comment,
+            topic: topic
         });
 
     } catch (error) {
         console.error("Error processing with Gemini:", error);
-        
+
         // Provide more specific error messages
         let errorMessage = "Internal Server Error during AI processing";
         let statusCode = 500;
-        
+
         if (error instanceof Error) {
             errorMessage = error.message;
         }
-        
+
         // Check for specific Gemini API errors
         if (errorMessage.includes("API_KEY") || errorMessage.includes("api key") || errorMessage.includes("API key")) {
             errorMessage = "Invalid or missing GEMINI_API_KEY. Please check your .env.local file.";
@@ -170,7 +245,7 @@ export async function POST(req: NextRequest) {
             errorMessage = "Network error. Please check your internet connection.";
             statusCode = 503;
         }
-        
+
         return NextResponse.json(
             { error: errorMessage },
             { status: statusCode }
