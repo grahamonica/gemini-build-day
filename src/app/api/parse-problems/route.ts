@@ -54,7 +54,8 @@ export async function POST(req: NextRequest) {
             - index (integer): its order in the doc (1-based) and the unique id.
             - text (string): full problem text, keep LaTeX intact and do NOT solve or add answers.
             - summary (string): one-line gist of the problem.
-            - imageBase64 (string or null): base64 (data URL friendly) crop of the problem region; if uncertain, use null.
+            - boundingBox (object | null): page-space rectangle for the problem (top-left origin, units = PDF points). Provide this even if you omit the image.
+            - imageBase64 (string or null): optional; prefer null to keep payload small. We will crop locally from the PDF using the bounding box.
 
             Guidance:
             - Preserve original wording and numbering when present.
@@ -75,6 +76,18 @@ export async function POST(req: NextRequest) {
                                     text: { type: SchemaType.STRING },
                                     summary: { type: SchemaType.STRING },
                                     imageBase64: { type: SchemaType.STRING, nullable: true },
+                                    boundingBox: {
+                                        type: SchemaType.OBJECT,
+                                        nullable: true,
+                                        properties: {
+                                            page: { type: SchemaType.INTEGER },
+                                            x: { type: SchemaType.NUMBER },
+                                            y: { type: SchemaType.NUMBER },
+                                            width: { type: SchemaType.NUMBER },
+                                            height: { type: SchemaType.NUMBER },
+                                        },
+                                        required: ["page", "x", "y", "width", "height"],
+                                    },
                                 },
                                 required: ["index", "text", "summary"],
                             },
@@ -112,9 +125,6 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        const ensureDataUrl = (value: string) =>
-            value.startsWith("data:") ? value : `data:image/png;base64,${value}`;
-
         const parsedProblems = Array.isArray(parsed.problems) ? parsed.problems : [];
         const normalized = parsedProblems.map((p: unknown, idx: number) => {
             const problem = (p ?? {}) as Record<string, unknown>;
@@ -130,17 +140,24 @@ export async function POST(req: NextRequest) {
                 ? problem.summary.trim()
                 : textValue.slice(0, 140);
 
-            const imageValue = typeof problem.imageBase64 === "string"
-                ? ensureDataUrl(problem.imageBase64.trim())
-                : null;
-
             const indexValue = typeof problem.index === "number" ? problem.index : idx + 1;
+
+            const bbox = problem.boundingBox && typeof problem.boundingBox === "object"
+                ? problem.boundingBox as Record<string, unknown>
+                : null;
 
             return {
                 index: indexValue,
                 text: textValue,
                 summary: summaryValue,
-                imageBase64: imageValue,
+                imageBase64: null, // prefer client-side crop using boundingBox
+                boundingBox: bbox ? {
+                    page: Number(bbox.page),
+                    x: Number(bbox.x),
+                    y: Number(bbox.y),
+                    width: Number(bbox.width),
+                    height: Number(bbox.height),
+                } : null,
             };
         });
 
