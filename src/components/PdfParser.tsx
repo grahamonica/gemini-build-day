@@ -2,19 +2,19 @@
 
 import React, { useState } from "react";
 import { AlertCircle, CheckCircle2, FileText, ImageIcon, Loader2, Upload, X } from "lucide-react";
+import { ParsedProblem } from "@/types/problems";
 
-type ParsedProblem = {
-    index: number;
-    text: string;
-    summary: string;
-    imageBase64?: string | null;
+type PdfParserProps = {
+    onParsed?: (problems: ParsedProblem[]) => void;
+    showPreview?: boolean;
 };
 
-export function PdfParser() {
+export function PdfParser({ onParsed, showPreview = true }: PdfParserProps) {
     const [file, setFile] = useState<File | null>(null);
     const [problems, setProblems] = useState<ParsedProblem[]>([]);
     const [status, setStatus] = useState<"idle" | "loading" | "error" | "success">("idle");
     const [error, setError] = useState<string | null>(null);
+    const [collapsed, setCollapsed] = useState(false);
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const nextFile = e.target.files?.[0] ?? null;
@@ -22,6 +22,10 @@ export function PdfParser() {
         setProblems([]);
         setError(null);
         setStatus("idle");
+        setCollapsed(false);
+        if (!nextFile) {
+            onParsed?.([]);
+        }
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -62,7 +66,9 @@ export function PdfParser() {
                 : [];
 
             setProblems(cleaned);
+            onParsed?.(cleaned);
             setStatus("success");
+            setCollapsed(true);
         } catch (err) {
             setStatus("error");
             setError(err instanceof Error ? err.message : "Something went wrong.");
@@ -74,7 +80,43 @@ export function PdfParser() {
         setProblems([]);
         setStatus("idle");
         setError(null);
+        onParsed?.([]);
+        setCollapsed(false);
     };
+
+    if (collapsed && status === "success") {
+        return (
+            <div className="w-full rounded-xl border border-border bg-white dark:bg-zinc-900 shadow-sm p-4 md:p-6 select-text flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                    <CheckCircle2 className="w-5 h-5 text-green-600 dark:text-green-400" />
+                    <div>
+                        <p className="text-sm font-medium text-zinc-800 dark:text-zinc-100">
+                            Parsed {problems.length} problem{problems.length === 1 ? "" : "s"}
+                        </p>
+                        {file ? (
+                            <p className="text-xs text-muted-foreground truncate">File: {file.name}</p>
+                        ) : null}
+                    </div>
+                </div>
+                <div className="flex items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={() => setCollapsed(false)}
+                        className="px-3 py-2 rounded-lg border border-border text-sm text-muted-foreground hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
+                    >
+                        Change PDF
+                    </button>
+                    <button
+                        type="button"
+                        onClick={resetSelection}
+                        className="px-3 py-2 rounded-lg bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 transition"
+                    >
+                        Clear
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="w-full rounded-xl border border-border bg-white dark:bg-zinc-900 shadow-sm p-4 md:p-6 select-text">
@@ -145,7 +187,7 @@ export function PdfParser() {
                 </div>
             )}
 
-            {problems.length > 0 && (
+            {showPreview && problems.length > 0 && (
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
                     {problems.map((problem) => (
                         <div

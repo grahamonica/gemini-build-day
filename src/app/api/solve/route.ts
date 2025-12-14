@@ -12,7 +12,7 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-        const { image, history, isReply, replyText, existingTopics } = await req.json();
+        const { image, history, isReply, replyText, existingTopics, problemText, problemSummary, problemImage } = await req.json();
 
         if (!image) {
             return NextResponse.json(
@@ -45,16 +45,50 @@ export async function POST(req: NextRequest) {
 
         const outputHistory: Content[] = [];
 
+        // Extract problem image base64 data if available
+        let problemImageData: string | null = null;
+        let problemImageMimeType: string = "image/png";
+        if (problemImage) {
+            // Handle data URL format (e.g., "data:image/png;base64,...")
+            if (problemImage.includes(",")) {
+                const [header, data] = problemImage.split(",");
+                problemImageData = data;
+                // Extract mime type from header if present
+                const mimeMatch = header.match(/data:([^;]+);/);
+                if (mimeMatch) {
+                    problemImageMimeType = mimeMatch[1];
+                }
+            } else {
+                problemImageData = problemImage;
+            }
+        }
+
         if (isReply || parsedHistory.length > 0) {
-            // Prepend the context image as the first user message
+            // Build parts for the first user message - include problem image if available
+            const contextParts: Part[] = [];
+            
+            // Add problem image first (so the model sees the original problem context)
+            if (problemImageData) {
+                contextParts.push({
+                    inlineData: {
+                        data: problemImageData,
+                        mimeType: problemImageMimeType
+                    }
+                });
+            }
+            
+            // Add the canvas snapshot
+            contextParts.push({
+                inlineData: {
+                    data: base64Data,
+                    mimeType: "image/png"
+                }
+            });
+
+            // Prepend the context images as the first user message
             outputHistory.push({
                 role: 'user',
-                parts: [{
-                    inlineData: {
-                        data: base64Data,
-                        mimeType: "image/png"
-                    }
-                }]
+                parts: contextParts
             });
             // Add the rest of the conversation
             outputHistory.push(...parsedHistory);
@@ -62,27 +96,39 @@ export async function POST(req: NextRequest) {
 
         const genAI = new GoogleGenerativeAI(apiKey);
 
+        // Build problem context if available
+        const problemContext = problemText
+            ? `
+Problem Being Worked On:
+${problemSummary ? `Summary: ${problemSummary}` : ''}
+${problemText}
+${problemImageData ? 'The first image is the problem diagram/figure. The second image is the user\'s whiteboard work.' : ''}
+`
+            : '';
+
         // Separate System Prompts and Schemas for the two modes
 
 
         // 1. Snapshot Mode: Evaluate the board, start new threads if needed.
         const snapshotSystemPrompt = `You are a supportive math tutor watching a user write on a whiteboard.
-
+${problemContext}
             Context:
             - The conversation starts with a snapshot of the whiteboard.
             - You are "watching" the board updates.
+            - The user is working on the problem described above.
 
-            Your Goal: Evaluate the work.Provide helpful feedback via comments ONLY if necessary.Do not give the user the answer, only provide feedback to steer them towards the right answer.
+            Your Goal: Evaluate the work in the context of the given problem. Provide helpful feedback via comments ONLY if necessary. Do not give the user the answer, only provide feedback to steer them towards the right answer.
             
             Rules:
-            1. Only comment if necessary(mistake, completion, helpful hint).
+            1. Only comment if necessary (mistake, completion, helpful hint).
             2. If work is in progress and looks ok, return null.
             3. If you comment, simple "Good job" is discouraged unless the problem is fully solved.
+            4. Your feedback should be specific to the problem they are working on.
             
             Output Format:
             Return valid JSON with:
             - "comment": string or null
-            - "topic": string or null(Short 2 - 5 word title for the thread if a comment is generated)
+            - "topic": string or null (Short 2-5 word title for the thread if a comment is generated)
         `;
 
         const snapshotSchema = {
@@ -101,17 +147,18 @@ export async function POST(req: NextRequest) {
         };
 
         // 2. Reply Mode: Continue an existing conversation/thread.
-        const replySystemPrompt = `You are a supportive math tutor.The user is replying to a comment you made on their whiteboard.
-
+        const replySystemPrompt = `You are a supportive math tutor. The user is replying to a comment you made on their whiteboard.
+${problemContext}
             Context:
-        - This is an existing thread.
+            - This is an existing thread.
             - You should reply to the user's message.
+            - The user is working on the problem described above.
 
-            Your Goal: Answer their question directly and concisely.Do not give the user the answer, only provide feedback to steer them towards the right answer.
+            Your Goal: Answer their question directly and concisely in the context of the given problem. Do not give the user the answer, only provide feedback to steer them towards the right answer.
             
             Output Format:
             Return valid JSON with:
-        - "comment": string(Your response)
+            - "comment": string (Your response)
             `;
 
         const replySchema = {
@@ -150,16 +197,25 @@ export async function POST(req: NextRequest) {
         } else {
             // New Snapshot case.
             // History is empty (or we are starting fresh).
-            // We send the Image.
-            // Wait, if outputHistory was empty, startChat([]) is fine.
-            // And we send image here.
+            // We send the Image(s).
+            
+            // Add problem image first if available (so model sees original problem context)
+            if (problemImageData) {
+                messageParts.push({
+                    inlineData: {
+                        data: problemImageData,
+                        mimeType: problemImageMimeType,
+                    }
+                });
+            }
+            
+            // Add the canvas snapshot
             messageParts.push({
                 inlineData: {
                     data: base64Data,
                     mimeType: "image/png",
                 }
             });
-            messageParts.push({ text: "[Automated snapshot update]" });
         }
 
         const result = await chat.sendMessage(messageParts);
