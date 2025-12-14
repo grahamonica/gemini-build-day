@@ -64,24 +64,25 @@ export async function POST(req: NextRequest) {
 
         // Separate System Prompts and Schemas for the two modes
 
+
         // 1. Snapshot Mode: Evaluate the board, start new threads if needed.
         const snapshotSystemPrompt = `You are a supportive math tutor watching a user write on a whiteboard.
-            
+
             Context:
             - The conversation starts with a snapshot of the whiteboard.
             - You are "watching" the board updates.
 
-            Your Goal: Evaluate the work. Provide helpful feedback via comments ONLY if necessary. Do not give the user the answer, only provide feedback to steer them towards the right answer.
+            Your Goal: Evaluate the work.Provide helpful feedback via comments ONLY if necessary.Do not give the user the answer, only provide feedback to steer them towards the right answer.
             
             Rules:
-            1. Only comment if necessary (mistake, completion, helpful hint).
+            1. Only comment if necessary(mistake, completion, helpful hint).
             2. If work is in progress and looks ok, return null.
             3. If you comment, simple "Good job" is discouraged unless the problem is fully solved.
             
             Output Format:
             Return valid JSON with:
             - "comment": string or null
-            - "topic": string or null (Short 2-5 word title for the thread if a comment is generated)
+            - "topic": string or null(Short 2 - 5 word title for the thread if a comment is generated)
         `;
 
         const snapshotSchema = {
@@ -100,18 +101,18 @@ export async function POST(req: NextRequest) {
         };
 
         // 2. Reply Mode: Continue an existing conversation/thread.
-        const replySystemPrompt = `You are a supportive math tutor. The user is replying to a comment you made on their whiteboard.
-            
+        const replySystemPrompt = `You are a supportive math tutor.The user is replying to a comment you made on their whiteboard.
+
             Context:
-            - This is an existing thread.
+        - This is an existing thread.
             - You should reply to the user's message.
 
-            Your Goal: Answer their question directly and concisely. Do not give the user the answer, only provide feedback to steer them towards the right answer.
+            Your Goal: Answer their question directly and concisely.Do not give the user the answer, only provide feedback to steer them towards the right answer.
             
             Output Format:
             Return valid JSON with:
-            - "comment": string (Your response)
-        `;
+        - "comment": string(Your response)
+            `;
 
         const replySchema = {
             type: SchemaType.OBJECT,
@@ -165,9 +166,12 @@ export async function POST(req: NextRequest) {
         const response = await result.response;
         const jsonText = response.text();
 
+        console.log("Gemini raw response:", jsonText);
+
         let parsed;
         try {
             parsed = JSON.parse(jsonText);
+            console.log("Parsed JSON:", parsed);
         } catch (e) {
             console.error("Failed to parse JSON from model", jsonText);
             parsed = { comment: jsonText };
@@ -196,8 +200,8 @@ export async function POST(req: NextRequest) {
                 New Topic: "${topic}"
                 Existing Topics: ${JSON.stringify(existingTopics)}
                 
-                Is the New Topic redundant with any of the Existing Topics?
-                If it is semantically very similar or covers the same ground, return true.
+                Is the New Topic redundant with any of the Existing Topics ?
+            If it is semantically very similar or covers the same ground, return true.
                 `;
 
                 const result = await redundancyModel.generateContent(prompt);
@@ -221,9 +225,30 @@ export async function POST(req: NextRequest) {
 
     } catch (error) {
         console.error("Error processing with Gemini:", error);
+
+        // Provide more specific error messages
+        let errorMessage = "Internal Server Error during AI processing";
+        let statusCode = 500;
+
+        if (error instanceof Error) {
+            errorMessage = error.message;
+        }
+
+        // Check for specific Gemini API errors
+        if (errorMessage.includes("API_KEY") || errorMessage.includes("api key") || errorMessage.includes("API key")) {
+            errorMessage = "Invalid or missing GEMINI_API_KEY. Please check your .env.local file.";
+            statusCode = 401;
+        } else if (errorMessage.includes("quota") || errorMessage.includes("rate limit") || errorMessage.includes("429") || errorMessage.includes("RESOURCE_EXHAUSTED")) {
+            errorMessage = "API quota exceeded. The free tier has limits. Please wait a few minutes or upgrade your Google Cloud billing account for higher quotas.";
+            statusCode = 429;
+        } else if (errorMessage.includes("network") || errorMessage.includes("fetch")) {
+            errorMessage = "Network error. Please check your internet connection.";
+            statusCode = 503;
+        }
+
         return NextResponse.json(
-            { error: "Internal Server Error during AI processing" },
-            { status: 500 }
+            { error: errorMessage },
+            { status: statusCode }
         );
     }
 }

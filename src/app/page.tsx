@@ -5,6 +5,7 @@ import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Whiteboard } from "@/components/Whiteboard";
 import { Conversation, Thread, Message } from "@/components/Conversation";
 import { cn } from "@/lib/utils";
+import { PdfParser } from "@/components/PdfParser";
 
 export default function Home() {
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -27,11 +28,26 @@ export default function Home() {
         }),
       });
 
-      if (!response.ok) throw new Error("Failed to get response");
+      if (!response.ok) {
+        // Try to get the actual error message from the response
+        let errorMessage = `Server error: ${response.status} ${response.statusText}`;
+        try {
+          const errorData = await response.json();
+          if (errorData.error) {
+            errorMessage = errorData.error;
+          }
+        } catch (e) {
+          // If response isn't JSON, use status text
+        }
+        throw new Error(errorMessage);
+      }
+
       const data = await response.json();
+      console.log("API response data:", data);
 
       // 2. If API returns a comment, create a new thread
       if (data.comment) {
+        console.log("Creating thread with comment:", data.comment);
         const newThread: Thread = {
           id: Date.now().toString(),
           snapshot: imageData,
@@ -49,10 +65,15 @@ export default function Home() {
 
         // Auto-open chat if closed
         if (!isChatOpen) setIsChatOpen(true);
+      } else {
+        console.log("No comment returned from API (data.comment is null or undefined)");
       }
 
     } catch (error) {
-      console.error(error);
+      console.error("Error in handleCapture:", error);
+      // Optionally show error to user via a thread or notification
+      const errorMessage = error instanceof Error ? error.message : "Failed to process whiteboard snapshot";
+      console.error("Capture error:", errorMessage);
     }
   };
 
@@ -136,8 +157,12 @@ export default function Home() {
   };
 
   return (
-    <div className="flex h-screen w-full flex-col bg-zinc-50 dark:bg-black select-none overflow-hidden overscroll-none">
-      <header className="flex-none p-2 flex items-center justify-end">
+    <div className="flex min-h-screen w-full flex-col bg-zinc-50 dark:bg-black select-none overflow-x-hidden overflow-y-auto">
+      <div className="flex-none p-4 md:p-6 pb-2">
+        <PdfParser />
+      </div>
+
+      <header className="flex-none px-4 md:px-6 pt-2 pb-2 flex items-center justify-end">
         <button
           onClick={() => setIsChatOpen(!isChatOpen)}
           className="relative p-2 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors"

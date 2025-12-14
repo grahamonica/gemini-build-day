@@ -8,6 +8,28 @@ Create a .env.local file with the following variables:
 GEMINI_API_KEY=your_gemini_api_key
 ```
 
+## Video Generation
+
+The whiteboard includes a video generation feature that creates animated videos from your drawing process by combining all captured frames.
+
+### Setup
+
+1. **Install FFmpeg** (recommended for best quality):
+   - **macOS**: `brew install ffmpeg`
+   - **Linux**: `sudo apt-get install ffmpeg` or `sudo yum install ffmpeg`
+   - **Windows**: Download from [ffmpeg.org](https://ffmpeg.org/download.html)
+   
+   If FFmpeg is not installed, the system will automatically fall back to creating an animated GIF.
+
+2. **Usage**:
+   - Draw on the whiteboard
+   - Click the video icon (🎥) button in the toolbar to generate an animated video
+   - The video will show your drawing process as a timelapse animation
+   - You can cancel the generation at any time using the cancel button (X)
+   - Once complete, the video will appear and you can download it
+
+The system automatically captures frames while you're drawing (every 500ms) and combines them into a video showing the drawing process.
+
 Then, run the development server:
 
 ```bash
