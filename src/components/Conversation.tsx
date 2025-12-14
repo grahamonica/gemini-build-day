@@ -44,9 +44,9 @@ export function Conversation({ threads, onReply, onResolve }: ConversationProps)
     );
 
     return (
-        <div className="h-full w-full bg-white dark:bg-zinc-900 border-l border-border relative">
+        <div className="h-full w-full bg-white dark:bg-zinc-900 border-l border-border flex flex-col min-h-0">
             {/* Filter Header */}
-            <div className="absolute top-0 left-0 right-0 h-10 border-b border-border flex items-center justify-end px-2 bg-zinc-50/50 dark:bg-zinc-900/50 backdrop-blur-sm z-10">
+            <div className="flex-none h-10 border-b border-border flex items-center justify-end px-2 bg-zinc-50/50 dark:bg-zinc-900/50 backdrop-blur-sm">
                 <button
                     onClick={() => setShowResolved(!showResolved)}
                     className="text-xs flex items-center gap-1.5 px-2 py-1.5 rounded-md hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors text-muted-foreground font-medium"
@@ -59,7 +59,7 @@ export function Conversation({ threads, onReply, onResolve }: ConversationProps)
             {/* Thread List */}
             <div
                 ref={scrollRef}
-                className="absolute top-10 bottom-0 left-0 right-0 overflow-y-auto p-4 flex flex-col gap-4"
+                className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 min-h-0"
             >
                 {displayedThreads.map((thread) => (
                     <ThreadView

@@ -239,11 +239,11 @@ export function ProblemWorkspace({ problems }: ProblemWorkspaceProps) {
                     ) : null}
                 </div>
 
-                <div className="flex-1 grid grid-cols-1 lg:grid-cols-[minmax(0,3fr)_minmax(320px,1fr)] gap-4 min-h-0 overflow-hidden">
-                    <div className="relative h-full min-h-[500px] rounded-xl overflow-hidden shadow-sm border border-border bg-white dark:bg-zinc-950">
+                <div className="flex-1 grid grid-cols-1 lg:grid-cols-[minmax(0,3fr)_minmax(320px,1fr)] gap-4 min-h-0">
+                    <div className="relative min-h-[500px] rounded-xl overflow-hidden shadow-sm border border-border bg-white dark:bg-zinc-950">
                         <Whiteboard onCapture={(img) => handleCapture(activeIdx, img)} />
                     </div>
-                    <div className="rounded-xl overflow-hidden shadow-sm border border-border bg-white dark:bg-zinc-900 h-full min-h-[500px]">
+                    <div className="flex flex-col rounded-xl overflow-hidden shadow-sm border border-border bg-white dark:bg-zinc-900 min-h-[500px]">
                         <Conversation
                             threads={activeSession.threads}
                             onReply={(threadId, text) => handleReply(activeIdx, threadId, text)}
