@@ -1,9 +1,11 @@
 "use client";
 
 import React, { useRef, useState, useEffect, useCallback } from "react";
-import { Eraser, Pencil, Trash2, Video, Loader2, X, Share2, Download, Copy, Check, Gauge } from "lucide-react";
+import { Eraser, Pencil, Trash2, Video, Loader2, X, Share2, Download, Copy, Check, Gauge, Image as ImageIcon, Box } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Message } from "./Conversation";
+import { CRTVisualization3D } from "./CRTVisualization3D";
+import { Binomial3D } from "./Binomial3D";
 
 interface Point {
     x: number;
@@ -37,6 +39,17 @@ export function Whiteboard({ onCapture, onClear }: WhiteboardProps = {}) {
     const [copied, setCopied] = useState<boolean>(false);
     const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
     const videoRef = useRef<HTMLVideoElement | null>(null);
+    const [isGeneratingVisualization, setIsGeneratingVisualization] = useState<boolean>(false);
+    const [visualizationImage, setVisualizationImage] = useState<string | null>(null);
+    const [showVisualizationModal, setShowVisualizationModal] = useState<boolean>(false);
+    const [show3DVisualization, setShow3DVisualization] = useState<boolean>(false);
+    const [binomialData, setBinomialData] = useState<{
+        type?: string;
+        expression?: string;
+        coefficients?: number[];
+        terms?: string[];
+        degree?: number;
+    } | null>(null);
 
     // Timing refs
     const dragStartTime = useRef<number>(0);
@@ -348,13 +361,13 @@ export function Whiteboard({ onCapture, onClear }: WhiteboardProps = {}) {
 
     const cancelVideoGeneration = useCallback(() => {
         isCancelledRef.current = true;
-
+        
         // Cancel fetch request if active
         if (abortControllerRef.current) {
             abortControllerRef.current.abort();
             abortControllerRef.current = null;
         }
-
+        
         // Cancel GIF generation if active
         if (gifInstanceRef.current) {
             try {
@@ -364,11 +377,174 @@ export function Whiteboard({ onCapture, onClear }: WhiteboardProps = {}) {
                 // Ignore errors
             }
         }
-
+        
         setIsGeneratingVideo(false);
         setVideoProgress(0);
         setVideoMethod(null);
     }, []);
+
+    const generate3DBinomial = async () => {
+        if (!canvasRef.current) {
+            alert("Canvas not available. Please draw something on the whiteboard first.");
+            return;
+        }
+
+        // Capture the current whiteboard canvas
+        const canvasImage = canvasRef.current.toDataURL("image/png");
+        
+        // Check if canvas is empty
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const hasContent = imageData.data.some((pixel, index) => {
+                if (index % 4 === 3) {
+                    const alpha = pixel;
+                    const r = imageData.data[index - 3];
+                    const g = imageData.data[index - 2];
+                    const b = imageData.data[index - 1];
+                    return alpha > 0 && !(r === 255 && g === 255 && b === 255);
+                }
+                return false;
+            });
+
+            if (!hasContent) {
+                alert("Whiteboard is empty. Please draw a binomial or graph first.");
+                return;
+            }
+        }
+
+        try {
+            // Call API endpoint to analyze the whiteboard
+            const response = await fetch("/api/analyze-binomial", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ image: canvasImage }),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.error || "Failed to analyze whiteboard");
+            }
+
+            const parsedData = await response.json();
+
+            // Set the binomial data and show 3D visualization
+            setBinomialData(parsedData);
+            setShow3DVisualization(true);
+        } catch (error) {
+            console.error("Error generating 3D binomial:", error);
+            alert("Failed to analyze whiteboard for binomial. Using default visualization.");
+            // Use default binomial data
+            setBinomialData({
+                type: "binomial",
+                expression: "(x + y)³",
+                degree: 3,
+                coefficients: [1, 3, 3, 1],
+                terms: ["x³", "3x²y", "3xy²", "y³"]
+            });
+            setShow3DVisualization(true);
+        }
+    };
+
+    const generateVisualization = async () => {
+        setIsGeneratingVisualization(true);
+        setVisualizationImage(null);
+
+        try {
+            // Capture the current whiteboard canvas
+            if (!canvasRef.current) {
+                throw new Error("Canvas not available. Please draw something on the whiteboard first.");
+            }
+
+            const canvasImage = canvasRef.current.toDataURL("image/png");
+            
+            // Check if canvas is empty (all white/transparent)
+            const canvas = canvasRef.current;
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const hasContent = imageData.data.some((pixel, index) => {
+                    // Check alpha channel (every 4th value) and non-white pixels
+                    if (index % 4 === 3) {
+                        const alpha = pixel;
+                        const r = imageData.data[index - 3];
+                        const g = imageData.data[index - 2];
+                        const b = imageData.data[index - 1];
+                        // Not transparent and not white
+                        return alpha > 0 && !(r === 255 && g === 255 && b === 255);
+                    }
+                    return false;
+                });
+
+                if (!hasContent) {
+                    throw new Error("Whiteboard is empty. Please draw something first before generating a visualization.");
+                }
+            }
+
+            const response = await fetch("/api/nano-banana-image", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ 
+                    image: canvasImage,
+                    prompt: "Enhance and improve this technical diagram, making it cleaner and more professional while preserving all the key elements and annotations."
+                }),
+            });
+
+            if (!response.ok) {
+                let errorMessage = `Server error: ${response.status} ${response.statusText}`;
+                try {
+                    const errorData = await response.json();
+                    // Build a comprehensive error message
+                    if (errorData.error) {
+                        errorMessage = errorData.error;
+                        if (errorData.details) {
+                            errorMessage += `\n\nDetails: ${errorData.details}`;
+                        }
+                        if (errorData.alternatives && Array.isArray(errorData.alternatives)) {
+                            errorMessage += `\n\nAlternatives:\n${errorData.alternatives.map((alt: string, i: number) => `${i + 1}. ${alt}`).join('\n')}`;
+                        }
+                        if (errorData.note) {
+                            errorMessage += `\n\nNote: ${errorData.note}`;
+                        }
+                    } else if (errorData.details) {
+                        errorMessage = errorData.details;
+                    }
+                    console.error("API error details:", errorData);
+                } catch (e) {
+                    const errorText = await response.text().catch(() => "");
+                    console.error("API error text:", errorText);
+                    if (errorText) {
+                        try {
+                            const parsed = JSON.parse(errorText);
+                            errorMessage = parsed.error || parsed.details || errorMessage;
+                        } catch {
+                            errorMessage = errorText || errorMessage;
+                        }
+                    }
+                }
+                throw new Error(errorMessage);
+            }
+
+            // Check if response is JSON (error) or image blob
+            const contentType = response.headers.get("content-type");
+            if (contentType && contentType.includes("application/json")) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || "Failed to generate visualization");
+            }
+
+            // Get the image as blob
+            const blob = await response.blob();
+            const imageUrl = URL.createObjectURL(blob);
+            setVisualizationImage(imageUrl);
+            setShowVisualizationModal(true);
+        } catch (error) {
+            console.error("Error generating visualization:", error);
+            alert("Failed to generate visualization: " + (error instanceof Error ? error.message : "Unknown error"));
+        } finally {
+            setIsGeneratingVisualization(false);
+        }
+    };
 
     const generateVideo = async () => {
         if (!canvasRef.current || frames.length === 0) {
@@ -554,6 +730,34 @@ export function Whiteboard({ onCapture, onClear }: WhiteboardProps = {}) {
                 <div className="w-px h-6 bg-zinc-200 dark:bg-zinc-800 mx-1" />
 
                 <button
+                    onClick={generateVisualization}
+                    disabled={isGeneratingVisualization}
+                    className={cn(
+                        "p-2 rounded-full transition-colors",
+                        isGeneratingVisualization
+                            ? "opacity-50 cursor-not-allowed"
+                            : "hover:bg-purple-50 dark:hover:bg-purple-900/20 text-purple-600 dark:text-purple-400"
+                    )}
+                    title="Generate problem visualization"
+                >
+                    {isGeneratingVisualization ? (
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                        <ImageIcon className="w-5 h-5" />
+                    )}
+                </button>
+
+                <button
+                    onClick={generate3DBinomial}
+                    className="p-2 rounded-full transition-colors hover:bg-orange-50 dark:hover:bg-orange-900/20 text-orange-600 dark:text-orange-400"
+                    title="Generate 3D binomial visualization from whiteboard"
+                >
+                    <Box className="w-5 h-5" />
+                </button>
+
+                <div className="w-px h-6 bg-zinc-200 dark:bg-zinc-800 mx-1" />
+
+                <button
                     onClick={clearCanvas}
                     className="p-2 rounded-full hover:bg-red-50 text-red-500 transition-colors"
                 >
@@ -671,6 +875,74 @@ export function Whiteboard({ onCapture, onClear }: WhiteboardProps = {}) {
                         </div>
                     </div>
                 </div>
+            )}
+
+            {/* Visualization Modal */}
+            {showVisualizationModal && visualizationImage && (
+                <div 
+                    className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+                    onClick={() => {
+                        setShowVisualizationModal(false);
+                        setVisualizationImage(null);
+                    }}
+                >
+                    <div 
+                        className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        {/* Header */}
+                        <div className="flex items-center justify-between p-4 border-b border-zinc-200 dark:border-zinc-800">
+                            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+                                Problem Visualization
+                            </h2>
+                            <button
+                                onClick={() => {
+                                    setShowVisualizationModal(false);
+                                    setVisualizationImage(null);
+                                }}
+                                className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full transition-colors"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        {/* Image */}
+                        <div className="flex-1 p-4 overflow-auto bg-zinc-50 dark:bg-zinc-950 flex items-center justify-center">
+                            <img
+                                src={visualizationImage}
+                                alt="Problem visualization"
+                                className="max-w-full max-h-full rounded-lg shadow-lg"
+                            />
+                        </div>
+
+                        {/* Actions */}
+                        <div className="p-4 border-t border-zinc-200 dark:border-zinc-800 flex items-center gap-3">
+                            <a
+                                href={visualizationImage}
+                                download="problem-visualization.png"
+                                className="flex items-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors ml-auto"
+                            >
+                                <Download className="w-4 h-4" />
+                                <span>Download Image</span>
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 3D Visualization Modal */}
+            {show3DVisualization && (
+                binomialData ? (
+                    <Binomial3D 
+                        onClose={() => {
+                            setShow3DVisualization(false);
+                            setBinomialData(null);
+                        }} 
+                        binomialData={binomialData}
+                    />
+                ) : (
+                    <CRTVisualization3D onClose={() => setShow3DVisualization(false)} />
+                )
             )}
         </div>
     );
