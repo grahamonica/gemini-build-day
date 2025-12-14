@@ -17,9 +17,10 @@ interface Frame {
 
 interface WhiteboardProps {
     onCapture?: (imageData: string) => void;
+    onClear?: () => void;
 }
 
-export function Whiteboard({ onCapture }: WhiteboardProps = {}) {
+export function Whiteboard({ onCapture, onClear }: WhiteboardProps = {}) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [isDrawing, setIsDrawing] = useState(false);
     const [color, setColor] = useState("#000000");
@@ -175,10 +176,10 @@ export function Whiteboard({ onCapture }: WhiteboardProps = {}) {
 
         console.log("stopDrawing: Drag duration:", dragDuration, "ms");
 
-        // Logic: specific time threshold for "work unit"
-        // Increased threshold and delay to reduce API calls and avoid quota limits
-        if (dragDuration > 1000 && onCapture) { // Only capture if drawing for at least 1 second
-            // Schedule capture with longer delay to batch requests
+        // Logic: Debounce capture to "end of thought"
+        // We wait for a pause in drawing to capture, regardless of stroke duration
+        if (onCapture) {
+            // Schedule capture
             console.log("stopDrawing: Scheduling capture in 2 seconds");
             idleTimer.current = setTimeout(() => {
                 console.log("stopDrawing: Timer fired, calling onCapture");
@@ -186,9 +187,7 @@ export function Whiteboard({ onCapture }: WhiteboardProps = {}) {
                     const imageData = canvasRef.current.toDataURL("image/png");
                     onCapture(imageData);
                 }
-            }, 2000); // 2s pause to reduce frequency
-        } else {
-            console.log("stopDrawing: Drag too short, not capturing");
+            }, 2000);
         }
     };
 
@@ -225,6 +224,8 @@ export function Whiteboard({ onCapture }: WhiteboardProps = {}) {
         recordedChunksRef.current = []; // Clear recorded chunks
         stopRecording(); // Stop any active recording
         lastVideoFrameCountRef.current = 0; // Reset video frame count
+
+        if (onClear) onClear();
     };
 
     // Start recording canvas using MediaRecorder (more efficient)
@@ -538,11 +539,11 @@ export function Whiteboard({ onCapture }: WhiteboardProps = {}) {
                                 : "hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-600 dark:text-blue-400"
                         )}
                         title={
-                            frames.length === 0 
+                            frames.length === 0
                                 ? "No frames captured. Draw something first!"
                                 : frames.length <= lastVideoFrameCountRef.current
-                                ? "No new drawing since last video. Draw something new!"
-                                : `Generate video (${frames.length} frames captured)`
+                                    ? "No new drawing since last video. Draw something new!"
+                                    : `Generate video (${frames.length} frames captured)`
                         }
                     >
                         <Video className="w-5 h-5" />
@@ -562,11 +563,11 @@ export function Whiteboard({ onCapture }: WhiteboardProps = {}) {
 
             {/* Video Modal */}
             {showVideoModal && videoUrl && (
-                <div 
+                <div
                     className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
                     onClick={() => setShowVideoModal(false)}
                 >
-                    <div 
+                    <div
                         className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col"
                         onClick={(e) => e.stopPropagation()}
                     >

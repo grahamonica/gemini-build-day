@@ -23,7 +23,8 @@ export default function Home() {
         body: JSON.stringify({
           image: imageData,
           history: [], // New snapshot starts fresh context for now
-          isReply: false
+          isReply: false,
+          existingTopics: threads.filter(t => !t.isResolved).map(t => t.topic)
         }),
       });
 
@@ -56,7 +57,8 @@ export default function Home() {
           ],
           isResolved: false,
           createdAt: Date.now(),
-          unread: true
+          unread: true,
+          topic: data.topic || "New Discussion"
         };
 
         setThreads(prev => [...prev, newThread]);
@@ -176,7 +178,7 @@ export default function Home() {
       <main className="flex-1 w-full min-h-0 flex flex-col md:flex-row gap-4 p-4 md:p-6 pt-0">
         {/* Whiteboard Container - Grows to fill space */}
         <div className="flex-1 relative min-h-0 rounded-xl overflow-hidden shadow-sm border border-border">
-          <Whiteboard onCapture={handleCapture} />
+          <Whiteboard onCapture={handleCapture} onClear={() => setThreads([])} />
         </div>
 
         {/* Chat Sidebar - Collapsable */}
