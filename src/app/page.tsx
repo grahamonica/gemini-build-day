@@ -5,6 +5,7 @@ import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Whiteboard } from "@/components/Whiteboard";
 import { Conversation, Thread, Message } from "@/components/Conversation";
 import { cn } from "@/lib/utils";
+import { PdfParser } from "@/components/PdfParser";
 
 export default function Home() {
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -154,8 +155,12 @@ export default function Home() {
   };
 
   return (
-    <div className="flex h-screen w-full flex-col bg-zinc-50 dark:bg-black select-none overflow-hidden overscroll-none">
-      <header className="flex-none p-2 flex items-center justify-end">
+    <div className="flex min-h-screen w-full flex-col bg-zinc-50 dark:bg-black select-none overflow-x-hidden overflow-y-auto">
+      <div className="flex-none p-4 md:p-6 pb-2">
+        <PdfParser />
+      </div>
+
+      <header className="flex-none px-4 md:px-6 pt-2 pb-2 flex items-center justify-end">
         <button
           onClick={() => setIsChatOpen(!isChatOpen)}
           className="relative p-2 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors"
